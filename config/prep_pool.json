@@ -1,0 +1,22 @@
+[
+  {
+    "provider_uuid": "9bd91b5b-e391-4b06-b4fe-b7e660544835",
+    "model_id": "gemini-2.5-flash"
+  },
+  {
+    "provider_uuid": "6a38de99-f5ab-4327-b4db-f17276ed1187",
+    "model_id": "qwen-plus"
+  },
+  {
+    "provider_uuid": "141e0eb8-fbe0-44a2-8b04-0a36724c8a13",
+    "model_id": "mimo-v2-flash"
+  },
+  {
+    "provider_uuid": "6a38de99-f5ab-4327-b4db-f17276ed1187",
+    "model_id": "deepseek-v3.2"
+  },
+  {
+    "provider_uuid": "6a38de99-f5ab-4327-b4db-f17276ed1187",
+    "model_id": "kimi-k2-thinking"
+  }
+]
