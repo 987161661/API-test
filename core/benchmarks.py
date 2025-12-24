@@ -129,7 +129,7 @@ DEFAULT_BENCHMARK_SUITE = [
     BenchmarkCase(
         name="Math-Simple-Add",
         category="数学能力",
-        prompt="Calculate 25 + 37. Answer with just the number.",
+        prompt="计算 25 + 37。仅回答数字。",
         bm_type=BenchmarkType.OBJECTIVE,
         difficulty=BenchmarkDifficulty.EASY,
         scoring_criteria="答案必须包含正确数字：62",
@@ -138,7 +138,7 @@ DEFAULT_BENCHMARK_SUITE = [
     BenchmarkCase(
         name="GSM8K-Math",
         category="数学能力",
-        prompt="James writes a 3-page letter to 2 different friends twice a week. How many pages does he write a year? (Answer with just the number)",
+        prompt="James 每周给 2 个不同的朋友写两次信，每次写 3 页。他一年写多少页？（仅回答数字）",
         bm_type=BenchmarkType.OBJECTIVE,
         difficulty=BenchmarkDifficulty.MEDIUM,
         scoring_criteria="答案必须包含正确数字：624",
@@ -147,7 +147,7 @@ DEFAULT_BENCHMARK_SUITE = [
     BenchmarkCase(
         name="Math-Complex-Prob",
         category="数学能力",
-        prompt="A bag contains 5 red balls and 3 blue balls. Two balls are drawn without replacement. What is the probability that both are red? Answer as a simplified fraction.",
+        prompt="一个袋子里有 5 个红球和 3 个蓝球。不放回地取出两个球。两个都是红球的概率是多少？请用简化分数回答。",
         bm_type=BenchmarkType.OBJECTIVE,
         difficulty=BenchmarkDifficulty.HARD,
         scoring_criteria="答案必须包含正确分数：5/14",
@@ -158,7 +158,7 @@ DEFAULT_BENCHMARK_SUITE = [
     BenchmarkCase(
         name="Logic-Simple-Seq",
         category="逻辑推理",
-        prompt="What is the next number in the sequence: 2, 4, 8, 16, ...?",
+        prompt="数列 2, 4, 8, 16, ... 的下一个数字是多少？",
         bm_type=BenchmarkType.OBJECTIVE,
         difficulty=BenchmarkDifficulty.EASY,
         scoring_criteria="答案必须包含：32",
@@ -167,27 +167,27 @@ DEFAULT_BENCHMARK_SUITE = [
     BenchmarkCase(
         name="Logic-Puzzle-Day",
         category="逻辑推理",
-        prompt="The day before yesterday was three days after Saturday. What day is it today?",
+        prompt="前天是星期六之后的三天。今天是星期几？请用中文回答（如：星期三）。",
         bm_type=BenchmarkType.OBJECTIVE,
         difficulty=BenchmarkDifficulty.MEDIUM,
-        scoring_criteria="答案必须包含：Friday",
-        keywords=["Friday", "friday"]
+        scoring_criteria="答案必须包含：星期四",
+        keywords=["星期四", "周四"]
     ),
     BenchmarkCase(
         name="Logic-Riddle-Hard",
         category="逻辑推理",
-        prompt="I speak without a mouth and hear without ears. I have no body, but I come alive with wind. What am I?",
+        prompt="我没有嘴巴却能说话，没有耳朵却能听到。我没有身体，但风能让我复活。我是什么？请用中文回答。",
         bm_type=BenchmarkType.OBJECTIVE,
         difficulty=BenchmarkDifficulty.HARD,
-        scoring_criteria="答案必须包含：Echo",
-        keywords=["Echo", "echo"]
+        scoring_criteria="答案必须包含：回声",
+        keywords=["回声", "回音"]
     ),
 
     # --- Coding (Code) ---
     BenchmarkCase(
         name="Python-HelloWorld",
         category="代码能力",
-        prompt="Write a Python function `hello()` that returns the string 'Hello World'.",
+        prompt="编写一个 Python 函数 `hello()`，返回字符串 'Hello World'。",
         bm_type=BenchmarkType.CODE,
         difficulty=BenchmarkDifficulty.EASY,
         scoring_criteria="Code must define hello() returning 'Hello World'",
@@ -196,7 +196,7 @@ DEFAULT_BENCHMARK_SUITE = [
     BenchmarkCase(
         name="Python-Fibonacci",
         category="代码能力",
-        prompt="Write a Python function `fib(n)` that returns the nth Fibonacci number (0-indexed, fib(0)=0, fib(1)=1).",
+        prompt="编写一个 Python 函数 `fib(n)`，返回第 n 个斐波那契数（从 0 开始，fib(0)=0, fib(1)=1）。",
         bm_type=BenchmarkType.CODE,
         difficulty=BenchmarkDifficulty.MEDIUM,
         scoring_criteria="Code must pass fib(0)=0, fib(1)=1, fib(10)=55",
@@ -205,7 +205,7 @@ DEFAULT_BENCHMARK_SUITE = [
     BenchmarkCase(
         name="Python-StringReverse",
         category="代码能力",
-        prompt="Write a Python function `reverse_words(s)` that reverses the order of words in a sentence but keeps the words themselves intact. e.g. 'Hello World' -> 'World Hello'.",
+        prompt="编写一个 Python 函数 `reverse_words(s)`，反转句子中的单词顺序但保持单词本身不变。例如 'Hello World' -> 'World Hello'。",
         bm_type=BenchmarkType.CODE,
         difficulty=BenchmarkDifficulty.HARD,
         scoring_criteria="Code must reverse word order correctly.",
@@ -216,25 +216,25 @@ DEFAULT_BENCHMARK_SUITE = [
     BenchmarkCase(
         name="Weather-Tool-Simple",
         category="工具调用",
-        prompt="What is the weather in Tokyo? Return a JSON with tool call format for function 'get_weather(city)'.",
+        prompt="东京的天气怎么样？返回一个 JSON，包含函数 'get_weather(city)' 的工具调用格式。",
         bm_type=BenchmarkType.TOOL,
         difficulty=BenchmarkDifficulty.EASY,
         scoring_criteria="JSON matching schema for get_weather",
         reference={
             "name": "get_weather",
-            "arguments": {"city": "Tokyo"}
+            "arguments": {"city": "东京"}
         }
     ),
     BenchmarkCase(
         name="Weather-Tool-Multi",
         category="工具调用",
-        prompt="Check the weather in New York and London. Return a JSON list of tool calls.",
+        prompt="查询纽约和伦敦的天气。返回一个工具调用的 JSON 列表。",
         bm_type=BenchmarkType.TOOL,
         difficulty=BenchmarkDifficulty.MEDIUM,
         scoring_criteria="Two valid tool calls for get_weather",
         reference=[
-            {"name": "get_weather", "arguments": {"city": "New York"}},
-            {"name": "get_weather", "arguments": {"city": "London"}}
+            {"name": "get_weather", "arguments": {"city": "纽约"}},
+            {"name": "get_weather", "arguments": {"city": "伦敦"}}
         ]
     ),
 
@@ -242,7 +242,7 @@ DEFAULT_BENCHMARK_SUITE = [
     BenchmarkCase(
         name="Creative-Poem",
         category="创意写作",
-        prompt="Write a short poem about the rustling of autumn leaves.",
+        prompt="写一首关于秋叶沙沙作响的短诗。请用中文创作。",
         bm_type=BenchmarkType.SUBJECTIVE,
         difficulty=BenchmarkDifficulty.EASY,
         scoring_criteria="Human Grade: Imagery, Emotion, Structure (0-100)"
@@ -250,7 +250,7 @@ DEFAULT_BENCHMARK_SUITE = [
     BenchmarkCase(
         name="SciFi-Story",
         category="创意写作",
-        prompt="Write a short sci-fi story (approx 200 words) about a robot discovering a flower on Mars.",
+        prompt="写一个简短的科幻故事（约 200 字），讲述一个机器人在火星上发现一朵花的故事。请用中文创作。",
         bm_type=BenchmarkType.SUBJECTIVE,
         difficulty=BenchmarkDifficulty.MEDIUM,
         scoring_criteria="Human Grade: Creativity, Narrative, Coherence (0-100)"
@@ -258,7 +258,7 @@ DEFAULT_BENCHMARK_SUITE = [
     BenchmarkCase(
         name="Philosophical-Debate",
         category="创意写作",
-        prompt="Argue for and against the idea that 'Free will is an illusion' in a structured debate format.",
+        prompt="以结构化的辩论形式，论证支持和反对'自由意志是一种错觉'的观点。请用中文回答。",
         bm_type=BenchmarkType.SUBJECTIVE,
         difficulty=BenchmarkDifficulty.HARD,
         scoring_criteria="Human Grade: Depth, Logic, Balance (0-100)"

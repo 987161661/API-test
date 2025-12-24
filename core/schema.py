@@ -18,6 +18,7 @@ class TestResult(BaseModel):
     evaluation_reason: Optional[str] = None
     case_name: Optional[str] = None
     case_type: Optional[str] = None
+    details: Dict = {}  # Flexible dict for experiment-specific metrics
 
 class ChatMessage(BaseModel):
     role: str

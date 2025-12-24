@@ -68,8 +68,14 @@ class OpenAICompatibleProvider(LLMProvider):
         token_count = 0
         response_content = []
         
+        # Mimo Fix: Handle 307 Redirects manually if needed, though follow_redirects=True should handle it.
+        # But some clients might have issues if the redirect drops the method to GET.
+        # httpx handles 307 correctly by preserving the method (POST).
+        # Let's verify if 'mimo' needs special handling.
+        
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            # Using follow_redirects=True is key here.
+            async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
                 async with client.stream("POST", url, headers=self.headers, json=payload) as response:
                     if response.status_code != 200:
                         error_text = await response.aread()

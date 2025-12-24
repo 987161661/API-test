@@ -5,3 +5,9 @@ typer
 rich
 python-dotenv
 openai
+streamlit
+pandas
+plotly
+fastapi
+uvicorn
+websockets
