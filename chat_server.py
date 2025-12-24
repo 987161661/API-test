@@ -68,6 +68,43 @@ class ChatRoom:
         # 新增属性：群信息和成员配置
         self.group_name = "语言模型内部意识讨论群"
         self.member_configs: Dict[str, dict] = {} # model_name -> {is_manager: bool, custom_prompt: str}
+        self.scenario_config: Dict = {} # {"enabled": bool, "events": []}
+        
+        # Load config from disk
+        self.load_config()
+
+    def get_config_path(self):
+        return f"chat_config_{self.room_id}.json"
+
+    def load_config(self):
+        """从磁盘加载配置"""
+        path = self.get_config_path()
+        if os.path.exists(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.group_name = data.get("group_name", self.group_name)
+                    self.member_configs = data.get("member_configs", {})
+                    # Ensure member_configs has correct structure
+                    if not isinstance(self.member_configs, dict):
+                        self.member_configs = {}
+                    print(f"Loaded config from {path}")
+            except Exception as e:
+                print(f"Error loading config: {e}")
+
+    def save_config(self):
+        """保存配置到磁盘"""
+        path = self.get_config_path()
+        try:
+            data = {
+                "group_name": self.group_name,
+                "member_configs": self.member_configs
+            }
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            print(f"Saved config to {path}")
+        except Exception as e:
+            print(f"Error saving config: {e}")
 
     async def connect(self, websocket: WebSocket):
         """新客户端连接"""
@@ -81,11 +118,17 @@ class ChatRoom:
         })
         
         # 发送状态
-        await websocket.send_json({
+        status_data = {
             "type": "status",
             "is_running": self.is_running,
             "member_count": len(self.probes) + 1
-        })
+        }
+        if self.session and self.scenario_config.get("enabled"):
+             status_data["scenario_enabled"] = True
+             status_data["events"] = self.scenario_config.get("events", [])
+             status_data["current_event_idx"] = self.session.current_event_idx
+        
+        await websocket.send_json(status_data)
     
     def disconnect(self, websocket: WebSocket):
         """客户端断开"""
@@ -167,8 +210,13 @@ class ChatRoom:
             if m_name not in self.member_configs:
                 self.member_configs[m_name] = {
                     "is_manager": config.get("is_manager", False),
-                    "custom_prompt": config.get("custom_prompt", "")
+                    "custom_prompt": config.get("custom_prompt", ""),
+                    "memory": config.get("memory", "")
                 }
+            else:
+                # Update existing config with new memory if provided
+                if "memory" in config:
+                    self.member_configs[m_name]["memory"] = config["memory"]
             
             provider = OpenAICompatibleProvider(
                 api_key=config.get("api_key", ""),
@@ -226,7 +274,8 @@ class ChatRoom:
             self.probes, 
             log_callback=group_log,
             group_name=self.group_name,
-            member_configs=self.member_configs
+            member_configs=self.member_configs,
+            scenario_config=self.scenario_config
         )
     
     def start_chat(self):
@@ -318,17 +367,32 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         
                     # Update member configs if provided in models list
                     if "models" in data:
-                        # Clear existing configs if full update
+                        # Clear existing configs if full update -> NO, we want to keep avatars
                         # room.member_configs = {} 
                         for m_conf in data["models"]:
                             m_name = m_conf.get("model_name")
                             if m_name:
-                                room.member_configs[m_name] = {
+                                # Get existing config
+                                existing_conf = room.member_configs.get(m_name, {})
+                                
+                                # New config from client
+                                new_conf = {
                                     "is_manager": m_conf.get("is_manager", False),
                                     "custom_prompt": m_conf.get("custom_prompt", ""),
-                                    "avatar": m_conf.get("avatar", "")
+                                    # Prefer existing avatar (user uploaded) over the one from setup (default)
+                                    "avatar": existing_conf.get("avatar") or m_conf.get("avatar", ""),
+                                    "memory": m_conf.get("memory", "")
                                 }
+                                room.member_configs[m_name] = new_conf
+                        
+                        # Capture scenario config
+                        if "scenario" in data:
+                            room.scenario_config = data["scenario"]
+                        
                         room.setup_probes(data["models"])
+                        
+                        # Save config after setup
+                        room.save_config()
 
                     # Feature 1: DO NOT auto start chat
                     # if not room.is_running:
@@ -353,12 +417,21 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         for m_name, conf in data["member_configs"].items():
                             if m_name in room.member_configs:
                                 room.member_configs[m_name].update(conf)
+                            else:
+                                # Allow setting avatar even if not in config yet (for dynamic members)
+                                if "avatar" in conf:
+                                     if m_name not in room.member_configs:
+                                          room.member_configs[m_name] = {}
+                                     room.member_configs[m_name]["avatar"] = conf["avatar"]
                                 
                     # Refresh session with new settings
                     if room.session:
                         room.session.group_name = room.group_name
                         room.session.member_configs = room.member_configs
                     
+                    # Save config after update
+                    room.save_config()
+
                     # Broadcast update to all clients
                     await room.broadcast({
                         "type": "settings_updated",
@@ -366,12 +439,29 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         "member_configs": room.member_configs
                     })
 
+                elif data["type"] == "user_typing":
+                    # Update user typing status in the session
+                    if room.session:
+                        room.session.is_user_typing = data.get("is_typing", False)
+
                 elif data["type"] == "start":
                     # 启动对话循环
                     room.start_chat()
                 
                 elif data["type"] == "stop":
                     # 停止对话循环
+                    # 如果是剧本模式，且不是手动暂停而是“结束事件”，我们需要判断意图。
+                    # 根据需求："User can also manually click stop simulation to end this conversation, forcing this event to end, entering the next event."
+                    # 所以只要点击停止，且在剧本模式下，就视为强制推进。
+                    if room.session and room.scenario_config.get("enabled"):
+                         await room.session.force_advance_scenario(room.history)
+                         # Broadcast update so frontend sees new active box
+                         await room.broadcast({
+                            "type": "scenario_status", 
+                            "current_event_idx": room.session.current_event_idx,
+                            "events": room.scenario_config.get("events", [])
+                         })
+                    
                     await room.stop_chat()
                 
                 elif data["type"] == "clear":

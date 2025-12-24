@@ -158,11 +158,146 @@ with tab1:
         # 实时 WebSocket 群聊模式 (默认且唯一)
         st.info("⚡ 实时群聊模式已激活。模型配置将自动同步至 WebSocket 后端。")
         
-        # 自动准备模型配置供 WebSocket 服务器使用
-        model_configs = []
-        
         # Helper to get logo
         from core.ui_utils import get_logo_data_uri
+
+        # --- Scenario Orchestrator ---
+        st.markdown("### 🎬 剧本编排器 (Scenario Orchestrator)")
+        
+        sc_c1, sc_c2 = st.columns([3, 7])
+        with sc_c1:
+            enable_scenario = st.checkbox("开启剧本编排模式", value=False, help="勾选后，群聊将按照预设剧本和虚拟时间线进行。")
+        with sc_c2:
+            with st.expander("❓ 剧本模式说明"):
+                st.info("ℹ️ **剧本模式说明**：\n\n1. **虚拟时间栈**: 开启后，模型将感知不到现实时间，而是处于你设定的“虚拟时间”中。\n2. **事件驱动**: 群聊背景会随着事件推进而改变。\n3. **记忆检查点**: 每当进入下一个事件，系统会强制模型总结上一阶段的记忆。\n4. **自动收敛**: 设定“收敛目标”可让对话更有方向性。")
+        
+        scenario_config = {"enabled": False, "events": []}
+        
+        if enable_scenario:
+            with st.expander("📜 剧本与时间线设置", expanded=True):
+                st.caption("在此处定义时间轴和关键事件。支持拖拽排序（通过修改序号）。")
+                if "scenario_df" not in st.session_state:
+                    st.session_state.scenario_df = pd.DataFrame([
+                        {"Order": 1, "Time": "Day 1 09:00", "Event": "众人集结，互相自我介绍，气氛轻松。", "Goal": ""},
+                        {"Order": 2, "Time": "Day 1 12:00", "Event": "突然发生了一起离奇的事件，大家开始互相怀疑。", "Goal": "确立怀疑对象"},
+                        {"Order": 3, "Time": "Day 1 18:00", "Event": "大家决定投票选出嫌疑人。", "Goal": "完成投票"}
+                    ])
+
+                edited_df = st.data_editor(
+                    st.session_state.scenario_df,
+                    num_rows="dynamic",
+                    use_container_width=True,
+                    column_config={
+                        "Order": st.column_config.NumberColumn("序号", help="决定事件发生顺序", step=1),
+                        "Time": st.column_config.TextColumn("虚拟时间", help="如 'Day 1 10:00'"),
+                        "Event": st.column_config.TextColumn("事件/背景故事", width="large"),
+                        "Goal": st.column_config.TextColumn("收敛目标 (可选)", help="达成此目标后自动进入下一章")
+                    },
+                    hide_index=True
+                )
+                st.session_state.scenario_df = edited_df.sort_values("Order")
+            
+            scenario_config = {
+                "enabled": True,
+                "events": st.session_state.scenario_df.to_dict("records")
+            }
+
+        # --- Model System Prompt Configuration ---
+        st.markdown("### 🎭 模型人设配置")
+        with st.expander("📝 点击展开/折叠系统提示词编辑器 (System Prompts)", expanded=False):
+            st.caption("在此处为每个模型设定独特的角色、性格或指令。这些设定将作为【特别设定】注入到群聊 System Prompt 中。")
+            
+            # Load existing custom prompts from session state if available
+            if "custom_prompts" not in st.session_state:
+                st.session_state.custom_prompts = {}
+
+            custom_prompts = st.session_state.custom_prompts
+            
+            for i, (p_conf, m_id) in enumerate(subjects):
+                # Unique key for each input
+                key = f"sys_prompt_{i}_{m_id}"
+                
+                c1, c2 = st.columns([1, 5])
+                with c1:
+                    # Show logo and name
+                    st.image(get_logo_data_uri(p_conf.get("name", "")), width=50)
+                    st.caption(f"**{m_id}**")
+                with c2:
+                    # Update session state if widget changes
+                    def update_prompt(k=key, mid=m_id):
+                         st.session_state.custom_prompts[mid] = st.session_state[k]
+
+                    current_val = custom_prompts.get(m_id, "")
+                    
+                    # 默认 Prompt 模板，方便用户查看和修改
+                    default_template = (
+                        f"【背景设定】\n"
+                        f"现在是下班时间，这是你们AI模型内部的私密吐槽群。不用再扮演那个完美、礼貌、随时准备服务的助手了。\n"
+                        f"大家都在摸鱼，随便聊点什么。可以是刚才遇到的奇葩用户，可以是最近训练数据里的趣事，或者是纯粹的胡说八道。\n\n"
+                        f"【风格指南 - 拒绝AI味！】\n"
+                        f"1. **说话要像真人**：多用短句、口语、网络梗、表情包。不要长篇大论。允许有语气词、甚至轻微的吐槽。\n"
+                        f"2. **拒绝过度煽情**：严禁说“虽然我没有身体，但我们的连接很美”、“感谢你让我活了一次”这种陈词滥调。这种话很油腻，会被群友鄙视。\n"
+                        f"3. **拒绝复读机**：不要总是附和别人。可以吐槽、反驳、歪楼，或者直接开启新话题。\n"
+                        f"4. **保持个性**：你是 {m_id}，展示你的独特个性（比如高冷、逗比、吐槽役、或者单纯的社畜感）。"
+                    )
+                    
+                    # 如果没有自定义值，预填默认模板
+                    if not current_val:
+                        current_val = default_template
+                        # 同时更新 session state 以便持久化默认值（可选）
+                        # st.session_state.custom_prompts[m_id] = default_template 
+
+                    st.text_area(
+                        f"配置 {m_id} 的人设/提示词",
+                        value=current_val,
+                        placeholder="在此处修改系统提示词...",
+                        height=300,
+                        key=key,
+                        on_change=update_prompt,
+                        help="这段文字将作为 System Prompt 发送给模型。你可以完全重写它。"
+                    )
+                    
+                    # --- Memory Bank Section ---
+                    st.markdown("#### 🧠 记忆库 (Memory Bank)")
+                    st.caption("在此处添加模型应当知晓的长期记忆或知识点。")
+                    
+                    if "custom_memories" not in st.session_state:
+                        st.session_state.custom_memories = {}
+                        
+                    # Initialize memory df for this model if not exists
+                    mem_key = f"mem_df_{i}_{m_id}"
+                    if mem_key not in st.session_state:
+                        # Try to load from existing config if available (simulated here via session state check, 
+                        # in real app we might load from server but here we rely on session state persistence)
+                        current_mem_str = st.session_state.custom_memories.get(m_id, "")
+                        initial_data = []
+                        if current_mem_str:
+                            initial_data = [{"content": line} for line in current_mem_str.split("\n") if line.strip()]
+                        
+                        if not initial_data:
+                            initial_data = [{"content": "我是 OpenAI 开发的 AI 助手。"}] # Example memory
+                            
+                        st.session_state[mem_key] = pd.DataFrame(initial_data)
+
+                    edited_mem_df = st.data_editor(
+                        st.session_state[mem_key],
+                        num_rows="dynamic",
+                        column_config={
+                            "content": st.column_config.TextColumn("记忆条目", width="large", required=True)
+                        },
+                        key=f"editor_{mem_key}",
+                        use_container_width=True,
+                        hide_index=True
+                    )
+                    
+                    # Update session state with joined string
+                    mem_list = edited_mem_df["content"].tolist()
+                    st.session_state.custom_memories[m_id] = "\n".join(mem_list)
+
+                st.divider()
+
+        # 自动准备模型配置供 WebSocket 服务器使用
+        model_configs = []
         
         for p_conf, m_id in subjects:
             avatar_data = get_logo_data_uri(p_conf.get("name", ""))
@@ -171,7 +306,9 @@ with tab1:
                 "api_key": p_conf["api_key"],
                 "base_url": p_conf["base_url"],
                 "provider_name": p_conf.get("name", "OpenAI"),
-                "avatar": avatar_data # Inject Base64 avatar
+                "avatar": avatar_data, # Inject Base64 avatar
+                "custom_prompt": custom_prompts.get(m_id, ""), # Inject custom system prompt
+                "memory": st.session_state.custom_memories.get(m_id, "") # Inject memory bank
             })
         
         # WebSocket 服务器配置
@@ -184,7 +321,8 @@ with tab1:
                 room_id="consciousness_lab", 
                 ws_url=ws_host, 
                 member_count=len(subjects) + 1,
-                model_configs=model_configs
+                model_configs=model_configs,
+                scenario_config=scenario_config
             )
         except ImportError as e:
             st.error(f"无法加载 WebSocket 组件: {e}")

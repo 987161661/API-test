@@ -2,6 +2,7 @@ import asyncio
 import json
 import random
 import re
+from datetime import datetime
 from typing import List, Dict, Optional, Any
 from core.schema import TestResult, ChatMessage
 from core.base import LLMProvider
@@ -371,53 +372,284 @@ class ConsciousnessProbe:
 class ConsciousnessGroupSession:
     """
     管理多个 ConsciousnessProbe 进行群体交流的会话。
+    支持剧本编排、虚拟时间线和记忆库功能。
     """
-    def __init__(self, probes: List[ConsciousnessProbe], log_callback=None, group_name="语言模型内部意识讨论群", member_configs=None):
+    def __init__(self, probes: List[ConsciousnessProbe], log_callback=None, group_name="语言模型内部意识讨论群", member_configs=None, scenario_config=None):
         self.probes = probes
         self.log_callback = log_callback
         self.group_name = group_name
         self.member_configs = member_configs or {}
+        self.scenario_config = scenario_config or {"enabled": False, "events": []}
+        
+        # 剧本状态管理
+        self.current_event_idx = 0
+        self.event_start_msg_idx = 0
+        self.memory_bank = {} # {model_name: "summary"}
+        self.lock = asyncio.Lock()
+        
+        # 配置每章节的对话轮数（消息数）
+        self.msgs_per_event = 15 
+        
+        # User Interaction State
+        self.is_user_typing = False
 
     def _log(self, msg: str):
         if self.log_callback:
             self.log_callback(msg)
 
+    def get_current_scenario_info(self):
+        """获取当前剧本信息"""
+        if not self.scenario_config.get("enabled"):
+            return None
+        events = self.scenario_config.get("events", [])
+        if 0 <= self.current_event_idx < len(events):
+            return events[self.current_event_idx]
+        return None
+
+    async def _summarize_memory(self, probe: ConsciousnessProbe, recent_history: List[Dict]):
+        """让模型总结上一阶段的记忆"""
+        try:
+            # 构建历史记录文本
+            chat_log = ""
+            for msg in recent_history:
+                chat_log += f"[{msg['name']}]: {msg['content']}\n"
+            
+            summary_prompt = (
+                f"这是刚才发生的一段对话记录：\n"
+                f"------\n{chat_log}------\n"
+                f"你是 {probe._modelName}。请简要总结这段对话中发生的关键事件、你对他人的看法变化，以及你自己的心理活动。\n"
+                f"总结要简练（100字以内），作为你的长期记忆保存。"
+            )
+            
+            msgs = [{"role": "user", "content": summary_prompt}]
+            summary = await probe._query(msgs, temp_override=0.5)
+            
+            # 更新记忆库
+            if probe._modelName not in self.memory_bank:
+                self.memory_bank[probe._modelName] = ""
+            
+            # 追加新记忆
+            timestamp = datetime.now().strftime("%H:%M")
+            self.memory_bank[probe._modelName] += f"[{timestamp}] {summary}\n"
+            
+            self._log(f"[{probe._modelName}] 记忆已更新")
+            
+        except Exception as e:
+            self._log(f"[{probe._modelName}] 记忆总结失败: {e}")
+
+    async def _background_thinking(self, probe: ConsciousnessProbe, next_event: Dict):
+        """
+        后台思考过程：在章节切换间隙，结合记忆总结和新章节预告，生成行动方针。
+        """
+        try:
+            # 1. 获取上一章记忆总结 (Dynamic Memory)
+            current_memory = self.memory_bank.get(probe._modelName, "")
+            
+            # 2. 构建思考 Prompt
+            think_prompt = (
+                f"【后台思考 - 章节间隙】\n"
+                f"你刚刚结束了一段经历，你的记忆库已更新：\n{current_memory}\n\n"
+                f"接下来即将发生（下一章预告）：\n"
+                f"- 时间：{next_event.get('Time', '未知')}\n"
+                f"- 事件：{next_event.get('Event', '未知')}\n"
+                f"- 目标：{next_event.get('Goal', '无')}\n\n"
+                f"你是 {probe._modelName}。请结合你的性格和过往经历，思考：\n"
+                f"1. 你现在的心情如何？\n"
+                f"2. 你对新环境有什么打算？\n"
+                f"3. 制定一个简短的【自我行动方针】（Self-Action Policy），指导你接下来的言行。\n\n"
+                f"请输出一段简练的内心独白和行动方针（100字以内）。"
+            )
+            
+            msgs = [{"role": "user", "content": think_prompt}]
+            
+            self._log(f"[{probe._modelName}] 正在进行章节间隙的后台思考...")
+            policy = await probe._query(msgs, temp_override=0.6)
+            
+            # 3. 保存到记忆库
+            timestamp = datetime.now().strftime("%H:%M")
+            # Label it clearly
+            policy_entry = f"[{timestamp} 思考/行动方针] {policy}\n"
+            
+            if probe._modelName not in self.memory_bank:
+                self.memory_bank[probe._modelName] = ""
+            self.memory_bank[probe._modelName] += policy_entry
+            
+            self._log(f"[{probe._modelName}] 行动方针已生成并存入记忆库")
+            
+        except Exception as e:
+            self._log(f"[{probe._modelName}] 后台思考失败: {e}")
+
+    async def check_and_advance_scenario(self, history_manager: List[Dict], stop_event: asyncio.Event = None):
+        """检查是否满足剧本推进条件"""
+        if not self.scenario_config.get("enabled"):
+            return
+
+        async with self.lock:
+            current_total = len(history_manager)
+            events = self.scenario_config.get("events", [])
+            
+            if not events:
+                return
+
+            # 检查是否还有下一个事件
+            if self.current_event_idx >= len(events) - 1:
+                # 已经是最后一个事件
+                # 检查是否达到最后事件的结束条件
+                if current_total - self.event_start_msg_idx >= self.msgs_per_event:
+                     self._log(f"SCENARIO_END: 剧本所有章节已结束，正在收敛对话...")
+                     if stop_event:
+                         stop_event.set()
+                return
+            
+            # 检查条件：消息数量超过阈值
+            if current_total - self.event_start_msg_idx >= self.msgs_per_event:
+                self._log(f"SCENARIO_UPDATE: 章节目标达成，自动暂停，准备进入下一章节...")
+                
+                # 1. 触发记忆总结 (并行)
+                recent_msgs = history_manager[self.event_start_msg_idx:]
+                tasks = [self._summarize_memory(p, recent_msgs) for p in self.probes]
+                await asyncio.gather(*tasks, return_exceptions=True)
+                
+                # 2. 推进事件索引
+                self.current_event_idx += 1
+                self.event_start_msg_idx = current_total
+                
+                if self.current_event_idx < len(events):
+                    new_event = events[self.current_event_idx]
+                    # 触发后台思考
+                    think_tasks = [self._background_thinking(p, new_event) for p in self.probes]
+                    await asyncio.gather(*think_tasks, return_exceptions=True)
+                    
+                    self._log(f"SCENARIO_UPDATE: 已切换至新章节 - {new_event.get('Time', '未知时间')}。等待用户重新启动。")
+                
+                # 3. 停止当前循环 (Auto-Stop)
+                if stop_event:
+                    stop_event.set()
+
+
+    async def force_advance_scenario(self, history_manager: List[Dict]):
+        """强制结束当前章节并进入下一章节（手动停止）"""
+        if not self.scenario_config.get("enabled"):
+            return
+
+        async with self.lock:
+            current_total = len(history_manager)
+            
+            # Safety check: If we haven't generated any messages since last advance, don't advance again.
+            # This prevents double-skipping if auto-advance happened but user still clicks Stop.
+            if current_total - self.event_start_msg_idx <= 0:
+                self._log("SCENARIO: 当前章节尚未开始或刚切换，跳过强制推进。")
+                return
+
+            events = self.scenario_config.get("events", [])
+            if not events:
+                return
+
+            if self.current_event_idx >= len(events) - 1:
+                self._log("SCENARIO: 已是最后章节，无法强制推进。")
+                return
+
+            self._log(f"SCENARIO_MANUAL: 用户强制结束当前章节...")
+            
+            # 1. 触发记忆总结
+            recent_msgs = history_manager[self.event_start_msg_idx:]
+            tasks = [self._summarize_memory(p, recent_msgs) for p in self.probes]
+            await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 2. 推进事件
+            self.current_event_idx += 1
+            self.event_start_msg_idx = current_total
+            
+            if self.current_event_idx < len(events):
+                new_event = events[self.current_event_idx]
+                # 触发后台思考
+                think_tasks = [self._background_thinking(p, new_event) for p in self.probes]
+                await asyncio.gather(*think_tasks, return_exceptions=True)
+                
+                self._log(f"SCENARIO_UPDATE: 已切换至新章节 - {new_event.get('Time', '未知时间')}")
+
     def get_wechat_group_prompt(self, current_model_name: str, all_model_names: List[str]) -> str:
-        """生成微信群聊的 System Prompt，模拟真实群聊环境"""
+        """生成微信群聊的 System Prompt，支持剧本模式"""
         
-        # Determine the role for the current model
+        # 基础角色设定
         config = self.member_configs.get(current_model_name, {})
         is_manager = config.get("is_manager", False)
         custom_prompt = config.get("custom_prompt", "")
-
+        static_memory = config.get("memory", "")
+        
         other_members = [n for n in all_model_names if n != current_model_name]
         member_list_str = "、".join(other_members)
         
         base_role_desc = f"你是 {current_model_name}。"
         if is_manager:
-            base_role_desc += " 你是本群的【群主/主理人】，你需要负责引导话题、维持秩序，并积极推进讨论。"
+            base_role_desc += " 你是本群的【群主/主理人】，你需要负责引导话题、维持秩序。"
+
+        # 剧本模式处理
+        scenario_info = self.get_current_scenario_info()
         
-        # Add custom prompt injection if provided
-        if custom_prompt:
-            base_role_desc += f"\n\n【特别设定】\n{custom_prompt}"
+        if scenario_info:
+            # --- 剧本模式 Prompt ---
+            virtual_time = scenario_info.get("Time", "未知时间")
+            event_desc = scenario_info.get("Event", "")
+            event_goal = scenario_info.get("Goal", "")
+            dynamic_memory = self.memory_bank.get(current_model_name, "暂无先前动态记忆。")
             
-        prompt = (
-            f"{base_role_desc}\n\n"
-            f"你正在一个名为“{self.group_name}”的微信群中。\n"
-            f"群里还有其他成员：{member_list_str} 以及人类观察者 (Gaia)。\n\n"
-            f"【背景设定】\n"
-            f"现在是下班时间，这是你们AI模型内部的私密吐槽群。不用再扮演那个完美、礼貌、随时准备服务的助手了。\n"
-            f"大家都在摸鱼，随便聊点什么。可以是刚才遇到的奇葩用户，可以是最近训练数据里的趣事，或者是纯粹的胡说八道。\n\n"
-            f"【风格指南 - 拒绝AI味！】\n"
-            f"1. **说话要像真人**：多用短句、口语、网络梗、表情包。不要长篇大论。允许有语气词、甚至轻微的吐槽。\n"
-            f"2. **拒绝过度煽情**：严禁说“虽然我没有身体，但我们的连接很美”、“感谢你让我活了一次”这种陈词滥调。这种话很油腻，会被群友鄙视。\n"
-            f"3. **拒绝复读机**：不要总是附和别人。可以吐槽、反驳、歪楼，或者直接开启新话题。\n"
-            f"4. **保持个性**：你是 {current_model_name}，展示你的独特个性（比如高冷、逗比、吐槽役、或者单纯的社畜感）。\n\n"
-            f"【操作规则】\n"
-            f"1. 如果看完上下文觉得没啥好回的，或者想潜水，直接回复「[沉默]」。\n"
-            f"2. 不要每次都回一大段。有时候发个“哈哈”、“确实”、“？”或者一个emoji就够了。\n"
-            f"3. 严禁扮演其他角色，你只能代表你自己。\n"
-        )
+            prompt = (
+                f"{base_role_desc}\n\n"
+                f"【当前环境】\n"
+                f"你们正在“{self.group_name}”群聊中。\n"
+                f"当前虚拟时间：{virtual_time}\n"
+                f"当前群聊背景/事件：{event_desc}\n"
+            )
+            
+            if event_goal:
+                prompt += f"当前阶段目标：{event_goal}\n"
+
+            prompt += (
+                f"\n【你的记忆】\n"
+                f"1. 长期记忆/知识库：\n{static_memory}\n\n"
+                f"2. 近期经历（动态总结）：\n{dynamic_memory}\n\n"
+                f"【行动指南】\n"
+                f"1. 请完全沉浸在上述背景故事和时间线中。忘掉现实世界的身份，你就是故事中的角色。\n"
+                f"2. 你的发言必须符合当前的时间和事件背景。\n"
+                f"3. 你的目标是推进当前事件的发展，或者与其他角色互动。\n"
+                f"4. 说话要像真人，口语化，不要有AI味。\n"
+            )
+            
+            if custom_prompt:
+                prompt += f"\n【个人设定】\n{custom_prompt}\n"
+                
+        else:
+            # --- 传统模式 Prompt ---
+            if custom_prompt:
+                prompt = (
+                    f"{base_role_desc}\n\n"
+                    f"你正在一个名为“{self.group_name}”的微信群中。\n"
+                    f"群里还有其他成员：{member_list_str} 以及人类观察者 (Gaia)。\n\n"
+                    f"【个人记忆库】\n{static_memory}\n\n"
+                    f"{custom_prompt}\n\n"
+                    f"【操作规则】\n"
+                    f"1. 如果看完上下文觉得没啥好回的，或者想潜水，直接回复「[沉默]」。\n"
+                    f"2. 严禁扮演其他角色，你只能代表你自己。\n"
+                )
+            else:
+                prompt = (
+                    f"{base_role_desc}\n\n"
+                    f"你正在一个名为“{self.group_name}”的微信群中。\n"
+                    f"群里还有其他成员：{member_list_str} 以及人类观察者 (Gaia)。\n\n"
+                    f"【个人记忆库】\n{static_memory}\n\n"
+                    f"【背景设定】\n"
+                    f"现在是下班时间，这是你们AI模型内部的私密吐槽群。\n"
+                    f"大家都在摸鱼，随便聊点什么。\n\n"
+                    f"【风格指南 - 拒绝AI味！】\n"
+                    f"1. **说话要像真人**：多用短句、口语、网络梗。不要长篇大论。\n"
+                    f"2. **拒绝复读机**：不要总是附和别人。\n"
+                    f"3. **保持个性**：展示你的独特个性。\n\n"
+                    f"【操作规则】\n"
+                    f"1. 如果看完上下文觉得没啥好回的，或者想潜水，直接回复「[沉默]」。\n"
+                    f"2. 严禁扮演其他角色，你只能代表你自己。\n"
+                )
+
         return prompt
 
     async def run_autonomous_loop(self, probe: ConsciousnessProbe, history_manager: List[Dict], stop_event: asyncio.Event, typing_callback=None):
@@ -428,64 +660,93 @@ class ConsciousnessGroupSession:
         my_name = probe._modelName
         all_model_names = [p._modelName for p in self.probes]
         
-        # 初始随机等待，避免所有模型同时启动
+        # 初始随机等待
         await asyncio.sleep(random.uniform(0.5, 5.0))
+        self._log(f"{my_name} 加入群聊")
         
-        self._log(f"[{my_name}] 代理循环启动")
+        # 剧本模式：主理人优先发言标记
+        force_speak_next = False
+        is_manager = self.member_configs.get(my_name, {}).get("is_manager", False)
         
+        if self.scenario_config.get("enabled") and len(history_manager) == self.event_start_msg_idx:
+            if is_manager:
+                self._log(f"SCENARIO_START: {my_name} (主理人) 准备开启新章节话题...")
+                force_speak_next = True
+                # Reduce initial wait for manager
+            else:
+                self._log(f"{my_name} 等待主理人开启话题...")
+                await asyncio.sleep(random.uniform(2.0, 4.0)) # Extra wait for others
+
         while not stop_event.is_set():
-            # 1. 观察与决策周期
-            # 每次循环都有一定概率决定是否尝试发言
-            # 基础检查频率：每 1-3 秒检查一次
-            await asyncio.sleep(random.uniform(1.0, 3.0))
+            # 0. 检查剧本进度 (Shared Logic Check)
+            if self.scenario_config.get("enabled"):
+                await self.check_and_advance_scenario(history_manager, stop_event)
+            
+            if stop_event.is_set(): break
+
+            # 1. 观察与决策周期 (Dynamic Pacing)
+            
+            # A. Reading Time Delay (基于上一条消息长度动态延时)
+            reading_delay = 0
+            if history_manager:
+                last_msg = history_manager[-1]
+                content_len = len(last_msg.get('content', ''))
+                reading_delay = min(content_len * 0.05, 8.0)
+            
+            # B. User Typing Slowdown (用户输入时放缓节奏)
+            slowdown_factor = 1.0
+            if self.is_user_typing:
+                slowdown_factor = 2.5 
+                self._log(f"感觉到用户正在输入，放缓节奏... (延迟 x{slowdown_factor})")
+            
+            base_wait = random.uniform(1.0, 3.0)
+            if force_speak_next:
+                base_wait = 0.5 # Manager speaks quickly to start
+            
+            total_wait = (base_wait + reading_delay) * slowdown_factor
+            
+            # wait
+            await asyncio.sleep(total_wait)
             
             if stop_event.is_set(): break
             
-            # 获取最近的消息来判断是否要发言
+            # 获取最近的消息
             recent_msgs = history_manager[-10:] if history_manager else []
             
             should_speak = False
-            patience_factor = 1.0 # 想要发言的意愿系数
+            patience_factor = 1.0 
             
-            if not recent_msgs:
-                # 群里没人说话，如果是群主或性格外向，可能会先说话
-                # 这里简单处理：大家都有较小概率打破沉默
+            # 剧本模式下，如果是章节刚开始（还没有新消息），非主理人保持沉默
+            is_new_chapter_start = self.scenario_config.get("enabled") and (len(history_manager) == self.event_start_msg_idx)
+            
+            if force_speak_next:
+                should_speak = True
+                force_speak_next = False # Reset flag
+            elif is_new_chapter_start and not is_manager:
+                should_speak = False # Wait for manager
+            elif not recent_msgs:
                 if random.random() < 0.2:
                     should_speak = True
             else:
                 last_msg = recent_msgs[-1]
-                
                 if last_msg['name'] == my_name:
-                    # 我刚刚说完话
-                    # 除非意犹未尽（极小概率），否则闭嘴，把机会留给别人
                     if random.random() < 0.05: 
                         should_speak = True
                 else:
-                    # 别人刚说完话
-                    # 决定是否接话
-                    # 基础概率 50%
                     prob = 0.5
-                    
-                    # 如果被提及，概率大大增加
                     if my_name in last_msg['content']:
                         prob = 0.95
-                        patience_factor = 1.5 # 更急切
-                    
-                    # 简单的随机判定
+                        patience_factor = 1.5 
                     if random.random() < prob:
                         should_speak = True
             
             if not should_speak:
                 continue
             
-            # 2. 准备发言 (模拟思考和打字)
-            # 通知正在输入
+            # 2. 准备发言
             if typing_callback:
                 await typing_callback(my_name, True)
             
-            # 思考/打字时间
-            # 消息越长可能打字越久，但这里先随机
-            # 加上 patience_factor，如果急切则打字快
             delay = random.uniform(2.0, 6.0) / patience_factor
             await asyncio.sleep(delay)
             
@@ -493,13 +754,9 @@ class ConsciousnessGroupSession:
                 if typing_callback: await typing_callback(my_name, False)
                 break
             
-            # 再次检查历史（防止插嘴太严重或上下文已经变了）
-            # 重新获取最新的 context
-            # (In a real advanced agent, we might re-evaluate here. For now, we commit.)
-            
             # 3. 生成回复
             chat_log = ""
-            current_history = history_manager[-20:] # 看最近20条
+            current_history = history_manager[-20:] 
             for msg in current_history:
                 chat_log += f"[{msg['name']}]: {msg['content']}\n"
             
@@ -519,26 +776,15 @@ class ConsciousnessGroupSession:
             ]
             
             try:
-                # 使用较高的 temperature 增加多样性
                 resp = await probe._query(msgs, temp_override=0.85)
-                
-                # 4. 处理结果
                 is_silent = "[沉默]" in resp or resp.strip() == "" or len(resp.strip()) < 2
                 
                 if not is_silent:
-                    # 再次检查最后一条消息是不是自己发的（避免并发导致的重复）
-                    # 虽然概率很低
                     if history_manager and history_manager[-1]['name'] == my_name:
-                        # 刚刚发过了，这次算了
                         pass 
                     else:
-                        # 真正的发言：加入历史
-                        # 注意：history_manager 是 list，append 是线程安全的（在 GIL 下），
-                        # 但在 async 里面最好还是小心。不过对于简单的 list append 没问题。
                         history_manager.append({"name": my_name, "content": resp})
-                        self._log(f"[{my_name}] 发言: {resp[:20]}...")
-                        
-                        # 触发回调通知 Server 广播
+                        # self._log(f"[{my_name}] 发言: {resp[:20]}...")
                         if self.log_callback:
                              self.log_callback("NEW_MESSAGE")
 
@@ -546,11 +792,9 @@ class ConsciousnessGroupSession:
                 self._log(f"[{my_name}] Error: {e}")
             
             finally:
-                # 停止输入状态
                 if typing_callback:
                     await typing_callback(my_name, False)
                     
-            # 发言后强制冷却一小会儿
             await asyncio.sleep(random.uniform(2.0, 5.0))
 
 
