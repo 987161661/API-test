@@ -1001,7 +1001,7 @@ class ConsciousnessGroupSession:
                          quote_text = action_data.get("quote_text", "")
                          quote_user = action_data.get("quote_user", "")
                          
-                         full_content = f"「回复 {quote_user}: {quote_text}」\n{content}"
+                         full_content = content
                          msg = {
                              "name": my_name,
                              "content": full_content,
