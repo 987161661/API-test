@@ -852,11 +852,11 @@ function handleMessage(data) {{
             updateMemberFromMsg(data.message);
             break;
         case "pat":
-            addSystemMessage(`${{data.from_user}} 拍了拍 ${{data.to_user}}`);
+            addSystemMessage(`${data.from_user} 拍了拍 ${data.to_user}`, true);
             break;
         case "recall":
             removeMessageByTimestamp(data.msg_id);
-            addSystemMessage(`${{data.from_user}} 撤回了一条消息`);
+            addSystemMessage(`${data.from_user} 撤回了一条消息`, true);
             break;
         case "history":
             clearMessages();
@@ -916,7 +916,8 @@ function handleMessage(data) {{
             }}
             break;
         case "system":
-            addSystemMessage(data.content);
+            const isVisibleEvent = data.content.includes("加入群聊") || data.content.includes("拍了拍") || data.content.includes("撤回");
+            addSystemMessage(data.content, isVisibleEvent);
             break;
         case "members":
             // Initialize or update members list from server
@@ -1254,8 +1255,8 @@ function removeMessageByTimestamp(ts) {{
     }}
 }}
 
-function addSystemMessage(content) {{
-    if (isStageView) return;
+function addSystemMessage(content, forceVisible = false) {
+    if (isStageView && !forceVisible) return;
     const container = document.getElementById("messagesContainer");
     container.insertAdjacentHTML('beforeend', `<div class="wc-system-msg">${{content}}</div>`);
     container.scrollTop = container.scrollHeight;

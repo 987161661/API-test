@@ -862,6 +862,7 @@ class ConsciousnessGroupSession:
             # wait
             await asyncio.sleep(total_wait)
             
+            if self.is_paused: continue
             if stop_event.is_set(): break
             
             # 获取最近的消息
@@ -961,7 +962,7 @@ class ConsciousnessGroupSession:
                                 "from_user": my_name,
                                 "to_user": action_data.get("target", "Gaia")
                             })
-                        self._log(f"[{my_name}] 拍了拍 {action_data.get('target')}")
+                        print(f"[{self.room_id}] [{my_name}] 拍了拍 {action_data.get('target')}")
                         
                     elif action_type == "recall":
                         # Logic to recall last message
@@ -980,7 +981,7 @@ class ConsciousnessGroupSession:
                                     "from_user": my_name,
                                     "msg_id": removed_msg.get("timestamp") # Fallback ID
                                 })
-                            self._log(f"[{my_name}] 撤回了一条消息")
+                            print(f"[{self.room_id}] [{my_name}] 撤回了一条消息")
 
                     elif action_type == "image":
                         # Construct image message
