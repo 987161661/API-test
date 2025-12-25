@@ -1299,7 +1299,7 @@ function updateMemberCount(count) {{
     }}
 }}
 
-function updateTypingIndicator(models) {
+function updateTypingIndicator(models) {{
     if (isStageView) return;
     const indicator = document.getElementById("typingIndicator");
     if (models && models.length > 0) {{
