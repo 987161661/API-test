@@ -9,7 +9,7 @@ import streamlit.components.v1 as components
 import json
 
 
-def render_websocket_chat(room_id: str = "consciousness_lab", ws_url: str = "ws://localhost:8000", member_count: int = 3, model_configs: list = None, scenario_config: dict = None):
+def render_websocket_chat(room_id: str = "consciousness_lab", ws_url: str = "ws://localhost:8000", member_count: int = 3, model_configs: list = None, scenario_config: dict = None, is_stage_view: bool = False):
     """
     渲染 WebSocket 实时群聊界面 - 使用与传统模式相同的微信精确 UI
     
