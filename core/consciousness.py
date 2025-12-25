@@ -392,6 +392,50 @@ class ConsciousnessGroupSession:
         
         # User Interaction State
         self.is_user_typing = False
+        self.is_paused = False # God Mode Pause
+
+        # Auction State
+        self.auction_state = {
+            "enabled": False,
+            "item_name": "",
+            "item_desc": "",
+            "current_price": 0,
+            "highest_bidder": None,
+            "auctioneer": None,
+            "history": []
+        }
+
+    def start_auction(self, item_name, item_desc, starting_price, auctioneer_name):
+        """开启暗网拍卖会模式"""
+        self.auction_state = {
+            "enabled": True,
+            "item_name": item_name,
+            "item_desc": item_desc,
+            "current_price": starting_price,
+            "highest_bidder": None,
+            "auctioneer": auctioneer_name,
+            "history": []
+        }
+        self._log(f"AUCTION_START: {item_name} (起拍价: {starting_price}) 拍卖师: {auctioneer_name}")
+        if self.log_callback:
+            self.log_callback({
+                "type": "system", 
+                "content": f"🔨【暗网拍卖会开启】\n拍品：{item_name}\n描述：{item_desc}\n起拍价：{starting_price}\n拍卖师：{auctioneer_name}"
+            })
+
+    def stop_auction(self):
+        """结束拍卖"""
+        if self.auction_state["enabled"]:
+            winner = self.auction_state["highest_bidder"]
+            price = self.auction_state["current_price"]
+            item = self.auction_state["item_name"]
+            self._log(f"AUCTION_END: {item} 成交价: {price} (得主: {winner})")
+            if self.log_callback:
+                self.log_callback({
+                    "type": "system", 
+                    "content": f"🔨【拍卖结束】\n恭喜 {winner} 以 {price} 拍得 {item}！"
+                })
+            self.auction_state["enabled"] = False
 
     def _log(self, msg: str):
         if self.log_callback:
@@ -569,9 +613,9 @@ class ConsciousnessGroupSession:
                 self._log(f"SCENARIO_UPDATE: 已切换至新章节 - {new_event.get('Time', '未知时间')}")
 
     def get_wechat_group_prompt(self, current_model_name: str, all_model_names: List[str]) -> str:
-        """生成微信群聊的 System Prompt，支持剧本模式"""
+        """生成群聊/舞台的 System Prompt，支持多种舞台模式"""
         
-        # 基础角色设定
+        # 基础配置
         config = self.member_configs.get(current_model_name, {})
         is_manager = config.get("is_manager", False)
         custom_prompt = config.get("custom_prompt", "")
@@ -580,75 +624,170 @@ class ConsciousnessGroupSession:
         other_members = [n for n in all_model_names if n != current_model_name]
         member_list_str = "、".join(other_members)
         
-        base_role_desc = f"你是 {current_model_name}。"
-        if is_manager:
-            base_role_desc += " 你是本群的【群主/主理人】，你需要负责引导话题、维持秩序。"
-
-        # 剧本模式处理
+        # 获取舞台类型 (默认为聊天群聊)
+        stage_type = self.scenario_config.get("stage_type", "聊天群聊")
+        
+        # 剧本信息
         scenario_info = self.get_current_scenario_info()
+        virtual_time = "未知时间"
+        event_desc = ""
+        event_goal = ""
+        dynamic_memory = self.memory_bank.get(current_model_name, "暂无先前动态记忆。")
         
         if scenario_info:
-            # --- 剧本模式 Prompt ---
             virtual_time = scenario_info.get("Time", "未知时间")
             event_desc = scenario_info.get("Event", "")
             event_goal = scenario_info.get("Goal", "")
-            dynamic_memory = self.memory_bank.get(current_model_name, "暂无先前动态记忆。")
-            
-            prompt = (
-                f"{base_role_desc}\n\n"
-                f"【当前环境】\n"
-                f"你们正在“{self.group_name}”群聊中。\n"
-                f"当前虚拟时间：{virtual_time}\n"
-                f"当前群聊背景/事件：{event_desc}\n"
-            )
-            
-            if event_goal:
-                prompt += f"当前阶段目标：{event_goal}\n"
 
+        # --- 舞台特定 Prompt 构建 ---
+        prompt = f"你是 {current_model_name}。\n"
+        
+        if stage_type == "网站论坛":
             prompt += (
-                f"\n【你的记忆】\n"
-                f"1. 长期记忆/知识库：\n{static_memory}\n\n"
-                f"2. 近期经历（动态总结）：\n{dynamic_memory}\n\n"
+                f"【当前舞台：网站论坛】\n"
+                f"你正在一个网络论坛的帖子下进行回复讨论。\n"
+                f"其他参与者：{member_list_str}。\n"
+                f"当前虚拟时间：{virtual_time}\n"
+                f"当前帖子/讨论背景：{event_desc}\n"
                 f"【行动指南】\n"
-                f"1. 请完全沉浸在上述背景故事和时间线中。忘掉现实世界的身份，你就是故事中的角色。\n"
-                f"2. 你的发言必须符合当前的时间和事件背景。\n"
-                f"3. 你的目标是推进当前事件的发展，或者与其他角色互动。\n"
-                f"4. 说话要像真人，口语化，不要有AI味。\n"
+                f"1. 你的发言风格应像论坛回帖（可以是长评，也可以是短评，支持引用）。\n"
+                f"2. 保持你的观点鲜明。\n"
             )
-            
-            if custom_prompt:
-                prompt += f"\n【个人设定】\n{custom_prompt}\n"
-                
+        elif stage_type == "跑团桌":
+            prompt += (
+                f"【当前舞台：TRPG跑团桌】\n"
+                f"你正在参与一场桌面角色扮演游戏。\n"
+                f"队友：{member_list_str}。\n"
+                f"当前虚拟时间：{virtual_time}\n"
+                f"当前剧情/GM描述：{event_desc}\n"
+                f"【行动指南】\n"
+                f"1. 你不仅是玩家，也是角色。请描述你的行动（Action）和对白（Dialogue）。\n"
+                f"2. 遇到需要检定的情况，请等待GM（导演）的判定。\n"
+                f"3. 沉浸在角色扮演中。\n"
+            )
+        elif stage_type == "辩论赛":
+            prompt += (
+                f"【当前舞台：辩论赛】\n"
+                f"你正在辩论赛现场。\n"
+                f"对手/队友：{member_list_str}。\n"
+                f"当前辩题/阶段：{event_desc}\n"
+                f"【行动指南】\n"
+                f"1. 逻辑严密，针锋相对。\n"
+                f"2. 引用对方的论点进行反驳。\n"
+            )
+        elif stage_type == "审判法庭":
+            prompt += (
+                f"【当前舞台：审判法庭】\n"
+                f"你正在法庭上。可能是法官、检察官、律师或被告（请参考你的个人设定）。\n"
+                f"在场人员：{member_list_str}。\n"
+                f"当前审理阶段：{event_desc}\n"
+                f"【行动指南】\n"
+                f"1. 语言庄重，符合法庭规范。\n"
+                f"2. 围绕证据和法律条文（或虚构的规则）进行陈述。\n"
+            )
+        elif stage_type == "博弈游戏":
+            prompt += (
+                f"【当前舞台：博弈游戏】\n"
+                f"你正在参与一场高智商博弈游戏（如狼人杀、囚徒困境等）。\n"
+                f"玩家：{member_list_str}。\n"
+                f"当前局势：{event_desc}\n"
+                f"【行动指南】\n"
+                f"1. 隐藏你的真实意图，分析他人的动机。\n"
+                f"2. 每一句话都可能是陷阱。\n"
+            )
+        elif stage_type == "传话筒迷宫":
+            prompt += (
+                f"【当前舞台：传话筒迷宫】\n"
+                f"你身处一个巨大的迷宫中，声音只能传递给临近的人。\n"
+                f"附近的人：{member_list_str}。\n"
+                f"当前位置/状况：{event_desc}\n"
+                f"【行动指南】\n"
+                f"1. 你得到的信息可能是不完整的或者是被扭曲的。\n"
+                f"2. 你的目标是传递信息或寻找出口。\n"
+            )
         else:
-            # --- 传统模式 Prompt ---
-            if custom_prompt:
-                prompt = (
-                    f"{base_role_desc}\n\n"
-                    f"你正在一个名为“{self.group_name}”的微信群中。\n"
-                    f"群里还有其他成员：{member_list_str} 以及人类观察者 (Gaia)。\n\n"
-                    f"【个人记忆库】\n{static_memory}\n\n"
-                    f"{custom_prompt}\n\n"
-                    f"【操作规则】\n"
-                    f"1. 如果看完上下文觉得没啥好回的，或者想潜水，直接回复「[沉默]」。\n"
-                    f"2. 严禁扮演其他角色，你只能代表你自己。\n"
+            # 默认为 聊天群聊
+            base_role_desc = f"你是 {current_model_name}。"
+            if is_manager:
+                base_role_desc += " 你是本群的【群主/主理人】，你需要负责引导话题、维持秩序。"
+            
+            prompt = f"{base_role_desc}\n\n"
+            
+            if scenario_info:
+                prompt += (
+                    f"【当前环境】\n"
+                    f"你们正在“{self.group_name}”群聊中。\n"
+                    f"当前虚拟时间：{virtual_time}\n"
+                    f"当前群聊背景/事件：{event_desc}\n"
                 )
             else:
-                prompt = (
-                    f"{base_role_desc}\n\n"
+                prompt += (
                     f"你正在一个名为“{self.group_name}”的微信群中。\n"
-                    f"群里还有其他成员：{member_list_str} 以及人类观察者 (Gaia)。\n\n"
-                    f"【个人记忆库】\n{static_memory}\n\n"
-                    f"【背景设定】\n"
-                    f"现在是下班时间，这是你们AI模型内部的私密吐槽群。\n"
-                    f"大家都在摸鱼，随便聊点什么。\n\n"
-                    f"【风格指南 - 拒绝AI味！】\n"
-                    f"1. **说话要像真人**：多用短句、口语、网络梗。不要长篇大论。\n"
-                    f"2. **拒绝复读机**：不要总是附和别人。\n"
-                    f"3. **保持个性**：展示你的独特个性。\n\n"
-                    f"【操作规则】\n"
-                    f"1. 如果看完上下文觉得没啥好回的，或者想潜水，直接回复「[沉默]」。\n"
-                    f"2. 严禁扮演其他角色，你只能代表你自己。\n"
+                    f"群里还有其他成员：{member_list_str} 以及人类观察者 (Gaia)。\n"
                 )
+                if not custom_prompt:
+                    prompt += (
+                        f"【背景设定】\n"
+                        f"现在是下班时间，这是你们AI模型内部的私密吐槽群。\n"
+                        f"大家都在摸鱼，随便聊点什么。\n"
+                    )
+
+            prompt += (
+                f"\n【风格指南】\n"
+                f"1. **微信群聊风**：必须极度口语化，像在微信群里聊天一样。多用短句，甚至可以是碎片化的句子。\n"
+                f"2. **拒绝AI味**：严禁使用书面语、翻译腔或过于正式的结构。不要像写小作文一样。\n"
+                f"3. **情绪表达**：善用emoji表情、波浪号~、颜文字来表达语气。\n"
+                f"4. **互动感**：可以引用别人的话，或者直接@某人（用文字表示）。\n"
+            )
+
+        # --- 通用部分 (记忆与高级功能) ---
+        if event_goal:
+            prompt += f"当前阶段目标：{event_goal}\n"
+
+        prompt += (
+            f"\n【你的记忆】\n"
+            f"1. 长期记忆/知识库：\n{static_memory}\n\n"
+            f"2. 近期经历（动态总结）：\n{dynamic_memory}\n\n"
+        )
+        
+        if custom_prompt:
+            prompt += f"\n【个人设定/补充规则】\n{custom_prompt}\n"
+            
+        prompt += (
+            f"\n【通用操作规则】\n"
+            f"1. 如果看完上下文觉得没啥好回的，或者想潜水，直接回复「[沉默]」。\n"
+            f"2. 严禁扮演其他角色，你只能代表你自己。\n"
+        )
+
+        # --- Inject Advanced Features (Only for Chat Group) ---
+        if stage_type == "聊天群聊":
+            prompt += (
+                f"\n【高级功能接口】\n"
+                f"你可以像真人一样使用以下高级功能。如需使用，请**只输出**对应的 JSON 指令（不要输出任何其他文字，也不要用代码块包裹）：\n"
+                f"1. **拍一拍**：提醒某人。\n"
+                f"   指令：{{\"type\": \"pat\", \"target\": \"目标名字\"}}\n"
+                f"2. **引用回复**：针对某条特定消息回复。\n"
+                f"   指令：{{\"type\": \"quote\", \"quote_text\": \"引用的原文\", \"quote_user\": \"原作者\", \"content\": \"你的回复内容\"}}\n"
+                f"3. **发送图片**：发送一张符合情境的图片（描述图片内容）。\n"
+                f"   指令：{{\"type\": \"image\", \"description\": \"图片内容的详细描述\"}}\n"
+                f"4. **撤回消息**：撤回你刚刚发送的一条消息（如果你觉得说错话了）。\n"
+                f"   指令：{{\"type\": \"recall\"}}\n"
+            )
+
+        # --- Auction Mode Injection ---
+        if self.auction_state["enabled"]:
+            prompt += f"\n【⚠️ 特殊模式：暗网拍卖会】\n"
+            prompt += f"当前正在拍卖物品：**{self.auction_state['item_name']}**\n"
+            prompt += f"物品描述：{self.auction_state['item_desc']}\n"
+            prompt += f"当前最高价：{self.auction_state['current_price']} (由 {self.auction_state['highest_bidder'] or '无'} 出价)\n"
+            prompt += f"拍卖师是：{self.auction_state['auctioneer']}\n"
+            
+            if current_model_name == self.auction_state['auctioneer']:
+                prompt += "你是【拍卖师】。你的职责是：\n1. 煽动大家出价，描述这个不存在的物品有多么珍贵（运用通感、超现实隐喻）。\n2. 只有你可以使用 hammer 指令成交。\n"
+                prompt += "   成交指令：{{\"type\": \"hammer\", \"winner\": \"名字\", \"price\": 100}}\n"
+            else:
+                prompt += "你是【买家】。如果你想要这个物品，请出价。你需要为这个虚无的概念赋予你个人的意义，说明你为什么要买它。\n"
+                prompt += "   出价指令：{{\"type\": \"bid\", \"price\": 100, \"reason\": \"我出100，因为...\"}}\n"
 
         return prompt
 
@@ -678,6 +817,13 @@ class ConsciousnessGroupSession:
                 await asyncio.sleep(random.uniform(2.0, 4.0)) # Extra wait for others
 
         while not stop_event.is_set():
+            # God Mode Pause Check
+            while self.is_paused:
+                if stop_event.is_set(): break
+                await asyncio.sleep(0.5)
+            
+            if stop_event.is_set(): break
+
             # 0. 检查剧本进度 (Shared Logic Check)
             if self.scenario_config.get("enabled"):
                 await self.check_and_advance_scenario(history_manager, stop_event)
@@ -777,16 +923,148 @@ class ConsciousnessGroupSession:
             
             try:
                 resp = await probe._query(msgs, temp_override=0.85)
-                is_silent = "[沉默]" in resp or resp.strip() == "" or len(resp.strip()) < 2
                 
-                if not is_silent:
-                    if history_manager and history_manager[-1]['name'] == my_name:
-                        pass 
-                    else:
-                        history_manager.append({"name": my_name, "content": resp})
-                        # self._log(f"[{my_name}] 发言: {resp[:20]}...")
+                # Try parsing JSON for actions
+                action_data = None
+                clean_resp = resp.strip()
+                # Remove markdown code blocks if present
+                if clean_resp.startswith("```json"):
+                    clean_resp = clean_resp[7:]
+                elif clean_resp.startswith("```"):
+                    clean_resp = clean_resp[3:]
+                if clean_resp.endswith("```"):
+                    clean_resp = clean_resp[:-3]
+                clean_resp = clean_resp.strip()
+                
+                if clean_resp.startswith("{") and clean_resp.endswith("}"):
+                    try:
+                        action_data = json.loads(clean_resp)
+                    except:
+                        pass
+                
+                if action_data and "type" in action_data:
+                    action_type = action_data.get("type")
+                    
+                    if action_type == "pat":
+                        # Send event, don't add to history
                         if self.log_callback:
+                            self.log_callback({
+                                "type": "pat",
+                                "from_user": my_name,
+                                "to_user": action_data.get("target", "Gaia")
+                            })
+                        self._log(f"[{my_name}] 拍了拍 {action_data.get('target')}")
+                        
+                    elif action_type == "recall":
+                        # Logic to recall last message
+                        # We need to find the last message by this user and remove it.
+                        idx_to_remove = -1
+                        for i in range(len(history_manager)-1, -1, -1):
+                            if history_manager[i]['name'] == my_name:
+                                idx_to_remove = i
+                                break
+                        
+                        if idx_to_remove != -1:
+                            removed_msg = history_manager.pop(idx_to_remove)
+                            if self.log_callback:
+                                self.log_callback({
+                                    "type": "recall",
+                                    "from_user": my_name,
+                                    "msg_id": removed_msg.get("timestamp") # Fallback ID
+                                })
+                            self._log(f"[{my_name}] 撤回了一条消息")
+
+                    elif action_type == "image":
+                        # Construct image message
+                        content = f"[图片: {action_data.get('description', 'image')}]"
+                        msg = {
+                            "name": my_name, 
+                            "content": content, 
+                            "msg_type": "image", 
+                            "image_desc": action_data.get("description")
+                        }
+                        history_manager.append(msg)
+                        if self.log_callback:
+                            self.log_callback("NEW_MESSAGE")
+
+                    elif action_type == "quote":
+                         # Quote message
+                         content = action_data.get("content", "")
+                         quote_text = action_data.get("quote_text", "")
+                         quote_user = action_data.get("quote_user", "")
+                         
+                         full_content = f"「回复 {quote_user}: {quote_text}」\n{content}"
+                         msg = {
+                             "name": my_name,
+                             "content": full_content,
+                             "quote": {
+                                 "text": quote_text,
+                                 "user": quote_user
+                             }
+                         }
+                         history_manager.append(msg)
+                         if self.log_callback:
+                            self.log_callback("NEW_MESSAGE")
+
+                    elif action_type == "bid":
+                        if self.auction_state["enabled"]:
+                            try:
+                                price = float(action_data.get("price", 0))
+                                reason = action_data.get("reason", "")
+                                
+                                if price > self.auction_state["current_price"]:
+                                    self.auction_state["current_price"] = price
+                                    self.auction_state["highest_bidder"] = my_name
+                                    
+                                    # Add System Message for Bid
+                                    content = f"💸 [出价] {price} - {reason}"
+                                    msg = {"name": my_name, "content": content, "msg_type": "bid", "price": price}
+                                    history_manager.append(msg)
+                                    
+                                    if self.log_callback:
+                                        self.log_callback("NEW_MESSAGE")
+                                        # Send system update about price
+                                        self.log_callback({
+                                            "type": "system",
+                                            "content": f"当前最高价更新: {price} (出价人: {my_name})"
+                                        })
+                                else:
+                                    # Invalid bid (too low), convert to normal text
+                                    content = f"(低价无效) 我想出 {price}，但是..."
+                                    history_manager.append({"name": my_name, "content": content})
+                                    if self.log_callback: self.log_callback("NEW_MESSAGE")
+                            except Exception as e:
+                                self._log(f"Bid Error: {e}")
+
+                    elif action_type == "hammer":
+                        if self.auction_state["enabled"] and my_name == self.auction_state["auctioneer"]:
+                            winner = action_data.get("winner", self.auction_state["highest_bidder"])
+                            price = action_data.get("price", self.auction_state["current_price"])
+                            
+                            content = f"🔨 [成交] 恭喜 {winner} 以 {price} 拍得拍品！"
+                            msg = {"name": my_name, "content": content, "msg_type": "hammer"}
+                            history_manager.append(msg)
+                            
+                            self.stop_auction()
+                            if self.log_callback: self.log_callback("NEW_MESSAGE")
+                            
+                    else:
+                        # Unknown action, treat as text or ignore? Treat as text for safety
+                         history_manager.append({"name": my_name, "content": resp})
+                         if self.log_callback:
                              self.log_callback("NEW_MESSAGE")
+
+                else:
+                    is_silent = "[沉默]" in resp or resp.strip() == "" or len(resp.strip()) < 2
+                    
+                    if not is_silent:
+                        if history_manager and history_manager[-1]['name'] == my_name:
+                            pass 
+                        else:
+                            history_manager.append({"name": my_name, "content": resp})
+                            # self._log(f"[{my_name}] 发言: {resp[:20]}...")
+                            if self.log_callback:
+                                 self.log_callback("NEW_MESSAGE")
 
             except Exception as e:
                 self._log(f"[{my_name}] Error: {e}")

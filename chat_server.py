@@ -199,6 +199,53 @@ class ChatRoom:
             "content": content
         })
 
+    def set_paused(self, paused: bool):
+        """设置暂停状态"""
+        if self.session:
+            self.session.is_paused = paused
+            # Broadcast status to let UI know
+            asyncio.create_task(self.broadcast({
+                "type": "control_status",
+                "is_paused": paused,
+                "current_event_idx": self.session.current_event_idx
+            }))
+
+    async def inject_event(self, content: str, scope: str = "global"):
+        """注入突发事件"""
+        # Add system message to history
+        await self.add_message("System (God Mode)", f"【突发事件】{content}", is_user=False)
+        # Maybe force models to notice? They will see it in history next turn.
+
+    def jump_to_event(self, event_idx: int):
+        """跳转到指定剧本事件"""
+        if self.session and self.scenario_config.get("enabled"):
+            events = self.scenario_config.get("events", [])
+            if 0 <= event_idx < len(events):
+                self.session.current_event_idx = event_idx
+                # Reset start msg idx so we don't immediately skip if msg count is high?
+                # Actually, if we jump, we might want to reset the counter for this new event.
+                self.session.event_start_msg_idx = len(self.history)
+                
+                asyncio.create_task(self.broadcast({
+                    "type": "scenario_status",
+                    "current_event_idx": event_idx,
+                    "events": events
+                }))
+
+    def update_scenario(self, events: List[dict]):
+        """更新剧本"""
+        if self.session:
+            # Update session scenario config
+            self.session.scenario_config["events"] = events
+            # Update local config reference (they might be the same object, but just in case)
+            self.scenario_config["events"] = events
+            
+            # Broadcast update
+            asyncio.create_task(self.broadcast({
+                "type": "scenario_update",
+                "events": events
+            }))
+
     def setup_probes(self, model_configs: List[dict]):
         """设置模型探针"""
         self.probes = []
@@ -248,7 +295,14 @@ class ChatRoom:
         def group_log(msg):
             try:
                 loop = asyncio.get_event_loop()
-                # Ensure msg is string and strip it for comparison
+                
+                # Handle dictionary events (Advanced features)
+                if isinstance(msg, dict):
+                    # Direct broadcast of event
+                    asyncio.run_coroutine_threadsafe(self.broadcast(msg), loop)
+                    return
+
+                # Handle legacy string events
                 msg_str = str(msg).strip()
                 if msg_str == "NEW_MESSAGE":
                     # 获取最新的一条消息并广播
@@ -530,6 +584,76 @@ async def list_rooms():
             for room_id, room in rooms.items()
         ]
     }
+
+# --- God Mode Control Endpoints ---
+
+class ControlRequest(BaseModel):
+    content: Optional[str] = None
+    event_idx: Optional[int] = None
+    scenario_events: Optional[List[dict]] = None
+
+@app.post("/control/{room_id}/pause")
+async def pause_room(room_id: str):
+    room = rooms.get(room_id)
+    if room:
+        room.set_paused(True)
+        return {"status": "paused"}
+    return {"error": "Room not found"}
+
+@app.post("/control/{room_id}/resume")
+async def resume_room(room_id: str):
+    room = rooms.get(room_id)
+    if room:
+        room.set_paused(False)
+        return {"status": "resumed"}
+    return {"error": "Room not found"}
+
+@app.post("/control/{room_id}/event")
+async def inject_event(room_id: str, req: ControlRequest):
+    room = rooms.get(room_id)
+    if room and req.content:
+        await room.inject_event(req.content)
+        return {"status": "event_injected"}
+    return {"error": "Room not found or empty content"}
+
+@app.post("/control/{room_id}/jump")
+async def jump_event(room_id: str, req: ControlRequest):
+    room = rooms.get(room_id)
+    if room and req.event_idx is not None:
+        room.jump_to_event(req.event_idx)
+        return {"status": "jumped"}
+    return {"error": "Room not found or invalid index"}
+
+@app.post("/control/{room_id}/update_scenario")
+async def update_scenario_endpoint(room_id: str, req: ControlRequest):
+    room = rooms.get(room_id)
+    if room and req.scenario_events is not None:
+        room.update_scenario(req.scenario_events)
+        return {"status": "scenario_updated"}
+    return {"error": "Room not found or invalid events"}
+
+@app.get("/control/{room_id}/history")
+async def get_history(room_id: str):
+    room = rooms.get(room_id)
+    if room:
+        return {
+            "history": room.history, 
+            "current_event_idx": room.session.current_event_idx if room.session else 0,
+            "scenario": room.scenario_config.get("events", [])
+        }
+    return {"history": [], "scenario": []}
+
+@app.get("/control/{room_id}/status")
+async def get_status(room_id: str):
+    room = rooms.get(room_id)
+    if room:
+        return {
+            "is_running": room.is_running,
+            "is_paused": room.session.is_paused if room.session else False,
+            "current_event_idx": room.session.current_event_idx if room.session else 0,
+            "total_events": len(room.scenario_config.get("events", []))
+        }
+    return {"is_running": False, "is_paused": False}
 
 
 if __name__ == "__main__":

@@ -542,6 +542,36 @@ input:checked + .slider:before {{ transform: translateX(14px); }}
 ...
 */
 
+/* Image & Quote Styles */
+.wc-quote {{
+    background: #f2f2f2;
+    border-left: 3px solid #d0d0d0;
+    padding: 4px 8px;
+    margin-bottom: 6px;
+    font-size: 11px;
+    color: #666;
+    border-radius: 2px;
+    display: flex;
+    flex-direction: column;
+}}
+.wc-msg-image-placeholder {{
+    background: #f0f0f0;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 120px;
+}}
+.wc-pat-msg {{
+    text-align: center;
+    color: #b2b2b2;
+    font-size: 11px;
+    padding: 4px 0;
+}}
+
 </style>
 </head>
 <body>
@@ -819,6 +849,13 @@ function handleMessage(data) {{
             addMessage(data.message);
             updatePreview(data.message);
             updateMemberFromMsg(data.message);
+            break;
+        case "pat":
+            addSystemMessage(`${{data.from_user}} 拍了拍 ${{data.to_user}}`);
+            break;
+        case "recall":
+            removeMessageByTimestamp(data.msg_id);
+            addSystemMessage(`${{data.from_user}} 撤回了一条消息`);
             break;
         case "history":
             clearMessages();
@@ -1175,15 +1212,43 @@ function addMessage(msg) {{
          avatarIcon = `<img src="${{member.avatar}}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;">`;
     }}
 
-    const html = `<div class="wc-msg-row ${{isUser ? 'self' : 'other'}}">
+    // Prepare content (Text, Image, Quote)
+    let contentHtml = "";
+    if (msg.msg_type === "image") {{
+        contentHtml = `<div class="wc-msg-image-placeholder">
+            <div style="font-size:24px;">🖼️</div>
+            <div style="font-size:10px; color:#888;">${{escapeHtml(msg.image_desc || msg.content || "图片")}}</div>
+        </div>`;
+    }} else {{
+        contentHtml = escapeHtml(msg.content).replace(/\\n/g, '<br>');
+    }}
+
+    // Prepend Quote if exists
+    if (msg.quote) {{
+        const quoteHtml = `<div class="wc-quote">
+            <div style="font-weight:bold; margin-bottom:2px;">${{escapeHtml(msg.quote.user)}}:</div>
+            <div style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${{escapeHtml(msg.quote.text)}}</div>
+        </div>`;
+        contentHtml = quoteHtml + contentHtml;
+    }}
+
+    const html = `<div class="wc-msg-row ${{isUser ? 'self' : 'other'}}" data-timestamp="${{msg.timestamp || ''}}">
         <div class="wc-msg-avatar" style="${{avatarStyle}}" onclick="showThought('${{escapeHtml(msg.name)}}')">${{avatarIcon}}</div>
         <div class="wc-msg-body">
             ${{senderHtml}}
-            <div class="wc-bubble">${{escapeHtml(msg.content).replace(/\\n/g, '<br>')}}</div>
+            <div class="wc-bubble">${{contentHtml}}</div>
         </div>
     </div>`;
     container.insertAdjacentHTML('beforeend', html);
     container.scrollTop = container.scrollHeight;
+}}
+
+function removeMessageByTimestamp(ts) {{
+    if (!ts) return;
+    const rows = document.querySelectorAll(`.wc-msg-row[data-timestamp="${{ts}}"]`);
+    if (rows.length > 0) {{
+        rows[rows.length - 1].remove();
+    }}
 }}
 
 function addSystemMessage(content) {{
@@ -1378,6 +1443,32 @@ function insertEmoji(emoji) {{
 // Initialize
 initEmojiPicker();
 
+function initStageUI() {{
+    if (SCENARIO_CONFIG && SCENARIO_CONFIG.stage_type && SCENARIO_CONFIG.stage_type !== "聊天群聊") {{
+        const titleEl = document.querySelector(".title-text");
+        if (titleEl) {{
+            titleEl.innerText = SCENARIO_CONFIG.stage_type + " (待开发)";
+            titleEl.style.color = "#ff4d4f";
+        }}
+        
+        const body = document.querySelector(".wc-body");
+        if (body) {{
+            const watermark = document.createElement("div");
+            watermark.innerText = "⚠️ 界面待开发 - 仅文本模拟";
+            watermark.style.position = "absolute";
+            watermark.style.top = "50%";
+            watermark.style.left = "50%";
+            watermark.style.transform = "translate(-50%, -50%)";
+            watermark.style.opacity = "0.1";
+            watermark.style.fontSize = "24px";
+            watermark.style.pointerEvents = "none";
+            watermark.style.zIndex = "0";
+            body.appendChild(watermark);
+        }}
+    }}
+}}
+
+initStageUI();
 connect();
 </script>
 </body>
