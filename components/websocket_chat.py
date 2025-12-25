@@ -1255,6 +1255,7 @@ function removeMessageByTimestamp(ts) {{
 }}
 
 function addSystemMessage(content) {{
+    if (isStageView) return;
     const container = document.getElementById("messagesContainer");
     container.insertAdjacentHTML('beforeend', `<div class="wc-system-msg">${{content}}</div>`);
     container.scrollTop = container.scrollHeight;
