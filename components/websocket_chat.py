@@ -852,11 +852,11 @@ function handleMessage(data) {{
             updateMemberFromMsg(data.message);
             break;
         case "pat":
-            addSystemMessage(`${data.from_user} 拍了拍 ${data.to_user}`, true);
+            addSystemMessage(`${{data.from_user}} 拍了拍 ${{data.to_user}}`, true);
             break;
         case "recall":
             removeMessageByTimestamp(data.msg_id);
-            addSystemMessage(`${data.from_user} 撤回了一条消息`, true);
+            addSystemMessage(`${{data.from_user}} 撤回了一条消息`, true);
             break;
         case "history":
             clearMessages();
@@ -1255,7 +1255,7 @@ function removeMessageByTimestamp(ts) {{
     }}
 }}
 
-function addSystemMessage(content, forceVisible = false) {
+function addSystemMessage(content, forceVisible = false) {{
     if (isStageView && !forceVisible) return;
     const container = document.getElementById("messagesContainer");
     container.insertAdjacentHTML('beforeend', `<div class="wc-system-msg">${{content}}</div>`);
