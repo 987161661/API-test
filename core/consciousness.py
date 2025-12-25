@@ -620,9 +620,17 @@ class ConsciousnessGroupSession:
         is_manager = config.get("is_manager", False)
         custom_prompt = config.get("custom_prompt", "")
         static_memory = config.get("memory", "")
+        current_nickname = config.get("nickname", current_model_name)
         
-        other_members = [n for n in all_model_names if n != current_model_name]
-        member_list_str = "、".join(other_members)
+        # 构建其他成员列表（使用昵称）
+        other_members_str_list = []
+        for n in all_model_names:
+            if n != current_model_name:
+                n_conf = self.member_configs.get(n, {})
+                n_nick = n_conf.get("nickname", n)
+                other_members_str_list.append(n_nick)
+        
+        member_list_str = "、".join(other_members_str_list)
         
         # 获取舞台类型 (默认为聊天群聊)
         stage_type = self.scenario_config.get("stage_type", "聊天群聊")
@@ -640,7 +648,7 @@ class ConsciousnessGroupSession:
             event_goal = scenario_info.get("Goal", "")
 
         # --- 舞台特定 Prompt 构建 ---
-        prompt = f"你是 {current_model_name}。\n"
+        prompt = f"你是 {current_nickname} (ID: {current_model_name})。\n"
         
         if stage_type == "网站论坛":
             prompt += (
@@ -707,7 +715,7 @@ class ConsciousnessGroupSession:
             )
         else:
             # 默认为 聊天群聊
-            base_role_desc = f"你是 {current_model_name}。"
+            base_role_desc = f"你是 {current_nickname}。"
             if is_manager:
                 base_role_desc += " 你是本群的【群主/主理人】，你需要负责引导话题、维持秩序。"
             

@@ -149,11 +149,19 @@ class ChatRoom:
     async def add_message(self, name: str, content: str, is_user: bool = False):
         """添加消息并广播"""
         now = datetime.now()
+        timestamp_str = now.strftime("%H:%M:%S")
+        
+        # Scenario Time Sync
+        if self.session and self.scenario_config.get("enabled"):
+            scenario_info = self.session.get_current_scenario_info()
+            if scenario_info and "Time" in scenario_info:
+                timestamp_str = str(scenario_info["Time"])
+
         msg = {
             "name": name,
             "content": content,
-            "timestamp": now.strftime("%H:%M:%S"),
-            "ts": now.timestamp(), # Unix timestamp for calculations
+            "timestamp": timestamp_str,
+            "ts": now.timestamp(), # Keep real ordering for logic
             "is_user": is_user
         }
         
@@ -170,6 +178,18 @@ class ChatRoom:
             "type": "message",
             "message": msg
         })
+
+    def update_group_name(self, name: str):
+        """更新群名"""
+        self.group_name = name
+        # Broadcast update
+        asyncio.create_task(self.broadcast({
+            "type": "status",
+            "group_info": {"name": name},
+            "is_running": self.is_running,
+            "member_count": len(self.probes) + 1
+        }))
+        self.save_config()
     
     async def update_typing_status(self, model_name: str, is_typing: bool):
         """更新单个模型的输入状态并广播"""
@@ -226,11 +246,25 @@ class ChatRoom:
                 # Actually, if we jump, we might want to reset the counter for this new event.
                 self.session.event_start_msg_idx = len(self.history)
                 
+                # Get new time for display
+                new_event = events[event_idx]
+                new_time = new_event.get("Time", "未知时间")
+                
+                # Broadcast scenario update
                 asyncio.create_task(self.broadcast({
                     "type": "scenario_status",
                     "current_event_idx": event_idx,
                     "events": events
                 }))
+                
+                # Inject System Message to announce time jump
+                # We use create_task because jump_to_event is synchronous (called from FastAPI endpoint)
+                # but add_message is async.
+                asyncio.create_task(self.add_message(
+                    "System", 
+                    f"⏳ 时间跳转至: {new_time}", 
+                    is_user=False
+                ))
 
     def update_scenario(self, events: List[dict]):
         """更新剧本"""
@@ -258,12 +292,15 @@ class ChatRoom:
                 self.member_configs[m_name] = {
                     "is_manager": config.get("is_manager", False),
                     "custom_prompt": config.get("custom_prompt", ""),
-                    "memory": config.get("memory", "")
+                    "memory": config.get("memory", ""),
+                    "nickname": config.get("nickname", m_name) # Store nickname
                 }
             else:
-                # Update existing config with new memory if provided
+                # Update existing config
                 if "memory" in config:
                     self.member_configs[m_name]["memory"] = config["memory"]
+                if "nickname" in config:
+                    self.member_configs[m_name]["nickname"] = config["nickname"]
             
             provider = OpenAICompatibleProvider(
                 api_key=config.get("api_key", ""),
@@ -537,6 +574,7 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         config = room.member_configs.get(m_name, {})
                         members.append({
                             "name": m_name, 
+                            "nickname": config.get("nickname", m_name), # Add nickname
                             "is_user": False,
                             "is_manager": config.get("is_manager", False),
                             "custom_prompt": config.get("custom_prompt", ""),
@@ -591,6 +629,15 @@ class ControlRequest(BaseModel):
     content: Optional[str] = None
     event_idx: Optional[int] = None
     scenario_events: Optional[List[dict]] = None
+    group_name: Optional[str] = None
+
+@app.post("/control/{room_id}/group_name")
+async def set_group_name(room_id: str, request: ControlRequest):
+    """设置群名称"""
+    room = get_or_create_room(room_id)
+    if request.group_name:
+        room.update_group_name(request.group_name)
+    return {"status": "success", "group_name": room.group_name}
 
 @app.post("/control/{room_id}/pause")
 async def pause_room(room_id: str):

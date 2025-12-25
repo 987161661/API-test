@@ -65,5 +65,6 @@ render_websocket_chat(
     ws_url="ws://localhost:8000", 
     member_count=len(model_configs) + 1,
     model_configs=model_configs,
-    scenario_config={} 
+    scenario_config={},
+    is_stage_view=True
 )

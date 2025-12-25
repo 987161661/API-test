@@ -395,7 +395,7 @@ input:checked + .slider:before {{ transform: translateX(14px); }}
 .wc-chat-title:focus {{ outline: none; border-bottom: 1px solid #07c160; }}
 .member-count {{ font-weight: 400; color: #888; font-size: 12px; }}
 
-.typing-indicator {{ font-size: 11px; color: #07c160; font-style: italic; }}
+.typing-indicator {{ font-size: 11px; color: #1890ff; font-style: italic; }}
 .wc-chat-actions {{ display: flex; gap: 12px; align-items: center; }}
 .action-btn {{ font-size: 16px; color: #888; cursor: pointer; }}
 .action-btn:hover {{ color: #333; }}
@@ -406,7 +406,7 @@ input:checked + .slider:before {{ transform: translateX(14px); }}
 }}
 .wc-time-divider {{ text-align: center; padding: 6px 0; }}
 .wc-time-divider span {{ font-size: 10px; color: #b2b2b2; background: #f5f5f5; padding: 0 10px; }}
-.wc-system-msg {{ text-align: center; color: #888; font-size: 11px; padding: 4px; }}
+.wc-system-msg {{ text-align: center; color: #1890ff; font-size: 11px; padding: 4px; }}
 
 .wc-msg-row {{ display: flex; gap: 8px; max-width: 75%; }}
 .wc-msg-row.self {{ flex-direction: row-reverse; align-self: flex-end; }}
@@ -656,7 +656,7 @@ input:checked + .slider:before {{ transform: translateX(14px); }}
                 <div class="wc-chat-title-container">
                     <div style="display:flex; flex-direction:column;">
                         <div class="wc-chat-title" id="groupName" contenteditable="true" spellcheck="false" onblur="updateGroupName()">语言模型内部意识讨论群</div>
-                        <div id="scenarioStatus" style="font-size:10px; color:#07c160; display:none;"></div>
+                        <div id="scenarioStatus" style="font-size:10px; color:#1890ff; display:none;"></div>
                     </div>
                     <span class="member-count" id="memberCountHeader">({member_count})</span>
                 </div>
@@ -698,6 +698,7 @@ input:checked + .slider:before {{ transform: translateX(14px); }}
 const WS_URL = "{full_ws_url}";
 const MODEL_CONFIGS = {models_json};
 const SCENARIO_CONFIG = {scenario_json};
+const isStageView = {str(is_stage_view).lower()};
 let ws = null;
 let isConnected = false;
 let isRunning = false;
@@ -895,8 +896,10 @@ function handleMessage(data) {{
             if (data.group_name) document.getElementById("groupName").innerText = data.group_name;
             if (data.scenario_status) {{
                 const sDiv = document.getElementById("scenarioStatus");
-                sDiv.innerText = data.scenario_status;
-                sDiv.style.display = "block";
+                if (!isStageView) {{
+                    sDiv.innerText = data.scenario_status;
+                    sDiv.style.display = "block";
+                }}
             }}
             if (data.member_configs) {{
                 // Update local members
@@ -1201,7 +1204,7 @@ function addMessage(msg) {{
     }}
     
     // User requested: Name MUST be preserved above bubble
-    const senderHtml = !isUser ? `<div class="wc-msg-sender" style="font-family: Arial, sans-serif;">${{escapeHtml(msg.name)}}</div>` : "";
+    const senderHtml = !isUser ? `<div class="wc-msg-sender" style="font-family: Arial, sans-serif;">${{escapeHtml(msg.nickname || msg.name)}}</div>` : "";
     
     // Find avatar
     let avatarIcon = isUser ? "🌌" : "🤖";
@@ -1270,7 +1273,8 @@ function escapeHtml(text) {{
 
 function updatePreview(msg) {{
     const preview = msg.content.length > 20 ? msg.content.substring(0, 20) + "..." : msg.content;
-    document.getElementById("lastPreview").textContent = (msg.name === "Gaia" ? "" : msg.name + ": ") + preview;
+    const name = msg.nickname || msg.name;
+    document.getElementById("lastPreview").textContent = (name === "Gaia" ? "" : name + ": ") + preview;
 }}
 
 function updateStatus() {{
@@ -1294,7 +1298,8 @@ function updateMemberCount(count) {{
     }}
 }}
 
-function updateTypingIndicator(models) {{
+function updateTypingIndicator(models) {
+    if (isStageView) return;
     const indicator = document.getElementById("typingIndicator");
     if (models && models.length > 0) {{
         indicator.textContent = models.slice(0, 2).join(", ") + " 正在输入...";

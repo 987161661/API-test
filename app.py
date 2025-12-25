@@ -136,6 +136,27 @@ st.markdown("""
 st.title("⚔️ LLM 模型竞技场")
 st.markdown("配置服务商，挑选同量级选手，一决高下！")
 
+# --- General Settings (Update) ---
+with st.sidebar:
+    st.header("⚙️ 总设置")
+    if st.button("🔄 更新项目 (Git Pull)"):
+        try:
+            # Run git pull
+            result = subprocess.run(
+                ["git", "pull", "origin", "main"],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+            if result.returncode == 0:
+                st.success(f"更新成功！\n{result.stdout}")
+                time.sleep(1)
+                st.rerun()
+            else:
+                st.error(f"更新失败:\n{result.stderr}")
+        except Exception as e:
+            st.error(f"执行出错: {e}")
+
 # --- Helper Functions ---
 async def fetch_models(base_url, key):
     headers = {"Authorization": f"Bearer {key}"}

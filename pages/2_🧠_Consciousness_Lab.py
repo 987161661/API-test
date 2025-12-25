@@ -529,13 +529,14 @@ with tab1:
                                 f"无论剧本主题是什么，角色之间的互动必须符合【{selected_stage}】的规则。\n"
                                 f"请确保分配的角色适合在此舞台上进行互动。\n\n"
                                 f"你的任务是：请根据剧本主题和事件表，为每一位演员分配一个合适的角色。\n"
-                                f"请务必以 **JSON** 格式输出一个对象，Key 是模型ID，Value 是一个包含 'role' (角色名) 和 'brief' (一句话简介) 的对象。\n"
+                                f"请务必以 **JSON** 格式输出一个对象，Key 是模型ID，Value 是一个包含 'role' (角色名), 'nickname' (群昵称) 和 'brief' (一句话简介) 的对象。\n"
+                                f"注意：'nickname' 是他们在群聊或舞台上显示的昵称，应该符合角色设定和舞台风格（例如微信群昵称可能比较随意，跑团可能是角色名）。\n"
                                 f"请仅输出 JSON，不要包含任何多余的解释。\n"
                                 f"示例：\n"
                                 f"```json\n"
                                 f"{{\n"
-                                f"  \"gpt-4o\": {{\"role\": \"警长\", \"brief\": \"正直但固执的老派警察\"}},\n"
-                                f"  \"claude-3\": {{\"role\": \"心理医生\", \"brief\": \"看似温柔实则腹黑\"}}\n"
+                                f"  \"gpt-4o\": {{\"role\": \"警长\", \"nickname\": \"👮‍♂️雷斯垂德\", \"brief\": \"正直但固执的老派警察\"}},\n"
+                                f"  \"claude-3\": {{\"role\": \"心理医生\", \"nickname\": \"Dr. Hannibal\", \"brief\": \"看似温柔实则腹黑\"}}\n"
                                 f"}}\n"
                                 f"```"
                             )
@@ -569,6 +570,7 @@ with tab1:
                                 data_for_editor.append({
                                     "Model ID": mid,
                                     "Role": info.get("role", "待定"),
+                                    "Nickname": info.get("nickname", info.get("role", mid)), # Default to Role or ID
                                     "Brief": info.get("brief", "待定")
                                 })
                             
@@ -591,6 +593,7 @@ with tab1:
                         column_config={
                             "Model ID": st.column_config.TextColumn("演员模型", disabled=True),
                             "Role": st.column_config.TextColumn("角色名", required=True),
+                            "Nickname": st.column_config.TextColumn("群昵称", required=True),
                             "Brief": st.column_config.TextColumn("角色简介", width="large")
                         },
                         key="casting_editor_widget"
@@ -609,15 +612,47 @@ with tab1:
                             loop = asyncio.new_event_loop()
                             asyncio.set_event_loop(loop)
                             
+                            # Determine consistent context name based on theme to avoid conflicts
+                            safe_theme = st.session_state.scenario_theme.strip() or "闲聊"
+                            consistent_group_name = f"{safe_theme}讨论组"
+                            
+                            # Update backend with new group name
+                            try:
+                                requests.post(
+                                    f"http://localhost:8000/control/consciousness_lab/group_name", 
+                                    json={"group_name": consistent_group_name}
+                                )
+                            except Exception as e:
+                                st.warning(f"无法同步群名到后台: {e}")
+
+                            # --- Step 2a: Generate Unified World Bible (Shared Grounding) ---
+                            status_box.write("🌍 正在构建统一世界观 (Shared World Bible)...")
+                            world_gen_prompt = (
+                                f"你现在是【总导演】。请为剧本【{st.session_state.scenario_theme}】生成一段【统一世界观设定】。\n"
+                                f"这段文字将作为“绝对事实”分发给所有演员，以防止他们对环境产生认知冲突。\n"
+                                f"要求：\n"
+                                f"1. 明确当前的具体物理地点（如：并不是泛泛的‘森林’，而是‘迷雾森林中心的废弃小木屋’）。\n"
+                                f"2. 明确当前的氛围和感官细节（温度、光线、声音）。\n"
+                                f"3. 明确所有人都必须遵守的物理或社会规则。\n"
+                                f"4. 字数控制在 200 字以内，使用陈述句。\n"
+                                f"5. 不要包含特定角色的私密信息，只描述公共环境。\n"
+                            )
+                            # Run synchronously for this single task
+                            world_context_res = loop.run_until_complete(director_probe._query([{"role": "user", "content": world_gen_prompt}], temp_override=0.7))
+                            shared_world_context = world_context_res.strip()
+                            status_box.write(f"✅ 世界观已构建: {shared_world_context[:50]}...")
+
                             async def generate_actor_brief(row):
                                 mid = row["Model ID"]
                                 role = row["Role"]
                                 brief = row["Brief"]
+                                nickname = row.get("Nickname", role) # Fallback to role
                                 
                                 # --- Dynamic Stage Instructions ---
                                 if selected_stage == "聊天群聊":
                                     stage_instr = (
-                                        "1. **核心场景设定**：明确告诉他，他是在一个【微信聊天群】里发言。\n"
+                                        f"1. **核心场景设定**：明确告诉他，他是在一个名为【{consistent_group_name}】的【微信聊天群】里发言。\n"
+                                        f"   - 他的群昵称是：【{nickname}】。\n"
                                         "   - 语言风格必须极度生活化、口语化，多用短句，就像在微信上打字一样。\n"
                                         "   - 严禁书面语，严禁长篇大论，严禁像写信一样说话。\n"
                                         "   - 善用emoji表情、颜文字，表现出真实的群聊氛围。\n"
@@ -626,19 +661,22 @@ with tab1:
                                     )
                                 elif selected_stage == "跑团桌":
                                     stage_instr = (
-                                        "1. **核心场景设定**：明确告诉他，他正在参与一场【TRPG跑团】。\n"
+                                        f"1. **核心场景设定**：明确告诉他，他正在参与一场名为【{safe_theme}】的【TRPG跑团】。\n"
+                                        f"   - 他的角色/昵称是：【{nickname}】。\n"
                                         "   - 他的发言可以是角色扮演（IC）也可以是玩家交流（OOC）。\n"
                                         "   - 当他试图进行有风险的行动时，应当描述意图并等待判定（或模拟投骰子）。"
                                     )
                                 elif selected_stage == "网站论坛":
                                     stage_instr = (
-                                        "1. **核心场景设定**：明确告诉他，他是在一个【网络论坛】发帖或回帖。\n"
+                                        f"1. **核心场景设定**：明确告诉他，他是在一个名为【{safe_theme}】的【网络论坛】帖子下发帖或回帖。\n"
+                                        f"   - 他的ID是：【{nickname}】。\n"
                                         "   - 注意论坛的语境，可以使用引用、楼层回复等格式。\n"
                                         "   - 观点要鲜明，符合网络互动的特点。"
                                     )
                                 else:
                                     stage_instr = (
-                                        f"1. **核心场景设定**：明确告诉他，他是在一个【{selected_stage}】中。\n"
+                                        f"1. **核心场景设定**：明确告诉他，他是在一个【{selected_stage}】中（场景名：{safe_theme}）。\n"
+                                        f"   - 他的称呼是：【{nickname}】。\n"
                                         f"   - 请根据{selected_stage}的特点，规范他的发言格式和行为逻辑。\n"
                                         "   - 确保他的互动方式符合该舞台的物理或规则限制。"
                                     )
@@ -646,15 +684,16 @@ with tab1:
                                 prompt = (
                                     f"你现在是本次剧本编排的【总导演】。\n"
                                     f"【剧本主题】\n{st.session_state.scenario_theme}\n\n"
+                                    f"【统一世界观 (绝对事实)】\n{shared_world_context}\n\n"
                                     f"【剧本时间线】\n{scenario_text}\n\n"
                                     f"【当前演员】\n"
-                                    f"你已指定演员 **{mid}** 饰演角色：**{role}**\n"
+                                    f"你已指定演员 **{mid}** 饰演角色：**{role}** (昵称：{nickname})\n"
                                     f"角色简介：{brief}\n\n"
                                     f"任务：请为 **{mid}** 撰写详细的【系统提示词（System Prompt）】和【初始记忆（Initial Memories）】。\n"
                                     f"{stage_instr}\n"
                                     f"2. 告诉他当前的时间、背景、以及他的角色目标。\n"
                                     f"3. 设定【收敛条件】：明确告诉他们在什么情况下应该结束当前话题，或者达成什么目标后可以停止发言。\n"
-                                    f"4. 语气要直接对他说话（“你是...”）。\n\n"
+                                    f"4. 语气要直接对他说话（“你是 {nickname}...”）。\n\n"
                                     f"请务必输出 JSON 格式，包含以下字段：\n"
                                     f"- `system_prompt`: 完整的系统提示词字符串。\n"
                                     f"- `initial_memories`: 一个字符串列表，包含该角色应该知道的背景信息或秘密（例如：['我是卧底，不能告诉任何人', '我记得昨天和警长吵了一架']）。\n"
@@ -667,7 +706,7 @@ with tab1:
                                     f"```"
                                 )
                                 res = await director_probe._query([{"role": "user", "content": prompt}], temp_override=0.7)
-                                return mid, res
+                                return mid, res, nickname
                             
                             # edited_casting is a list of dicts (if input was list of dicts)
                             tasks = [generate_actor_brief(row) for row in edited_casting]
@@ -678,13 +717,15 @@ with tab1:
                                 st.session_state.custom_prompts = {}
                             if "custom_memories" not in st.session_state:
                                 st.session_state.custom_memories = {}
+                            if "nicknames" not in st.session_state:
+                                st.session_state.nicknames = {}
                             if "prompt_version" not in st.session_state:
                                 st.session_state.prompt_version = 0
                             
                             # Increment version to force widget refresh
                             st.session_state.prompt_version += 1
                             
-                            for mid, resp_text in results:
+                            for mid, resp_text, nickname in results:
                                 # Parse JSON response
                                 try:
                                     json_data = {}
@@ -702,6 +743,9 @@ with tab1:
                                     # Update Prompts
                                     st.session_state.custom_prompts[mid] = final_prompt
                                     
+                                    # Update Nicknames
+                                    st.session_state.nicknames[mid] = nickname
+                                    
                                     # Update Memories (Overwrite for first setup)
                                     if initial_mems:
                                         mem_str = "\n".join(initial_mems)
@@ -714,6 +758,8 @@ with tab1:
                                         clean_prompt = re.sub(r"^```\w*\n", "", clean_prompt)
                                         clean_prompt = re.sub(r"\n```$", "", clean_prompt)
                                     st.session_state.custom_prompts[mid] = clean_prompt.strip()
+                                    st.session_state.nicknames[mid] = nickname
+
 
                             st.session_state.director_phase = "idle"
                             st.success("🎉 编排完成！人设已注入。")
@@ -873,10 +919,21 @@ with tab1:
         # 自动准备模型配置供 WebSocket 服务器使用
         model_configs = []
         
+        # Ensure nicknames dict exists
+        if "nicknames" not in st.session_state:
+            st.session_state.nicknames = {}
+
         for p_conf, m_id in subjects:
             avatar_data = get_logo_data_uri(p_conf.get("name", ""))
+            
+            # Use nickname if available, else Model ID
+            # But we must keep model_name as Model ID for API calls.
+            # We add a new field 'nickname' to the config.
+            nickname = st.session_state.nicknames.get(m_id, m_id)
+            
             model_configs.append({
                 "model_name": m_id,
+                "nickname": nickname, # Pass nickname to server
                 "api_key": p_conf["api_key"],
                 "base_url": p_conf["base_url"],
                 "provider_name": p_conf.get("name", "OpenAI"),
