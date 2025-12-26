@@ -771,15 +771,18 @@ class ConsciousnessGroupSession:
         if stage_type == "聊天群聊":
             prompt += (
                 f"\n【高级功能接口】\n"
-                f"你可以像真人一样使用以下高级功能。如需使用，请**只输出**对应的 JSON 指令（不要输出任何其他文字，也不要用代码块包裹）：\n"
-                f"1. **拍一拍**：提醒某人。\n"
-                f"   指令：{{\"type\": \"pat\", \"target\": \"目标名字\"}}\n"
-                f"2. **引用回复**：针对某条特定消息回复。\n"
-                f"   指令：{{\"type\": \"quote\", \"quote_text\": \"引用的原文\", \"quote_user\": \"原作者\", \"content\": \"你的回复内容\"}}\n"
-                f"3. **发送图片**：发送一张符合情境的图片（描述图片内容）。\n"
-                f"   指令：{{\"type\": \"image\", \"description\": \"图片内容的详细描述\"}}\n"
-                f"4. **撤回消息**：撤回你刚刚发送的一条消息（如果你觉得说错话了）。\n"
-                f"   指令：{{\"type\": \"recall\"}}\n"
+                f"你可以像真人一样使用以下高级功能。如需使用，请**严格遵守**以下格式，**只输出** JSON 对象：\n"
+                f"⚠️ **绝对禁止**在 JSON 前后添加任何解释性文字（如“好的”、“执行指令”等）。\n"
+                f"⚠️ **绝对禁止**使用 Markdown 代码块（```json ... ```）。\n"
+                f"⚠️ JSON 必须包含 `type` 字段。\n\n"
+                f"1. **引用回复**（针对某条特定消息）：\n"
+                f"   {{\"type\": \"quote\", \"quote_text\": \"引用的原文\", \"quote_user\": \"原作者\", \"content\": \"你的回复内容\"}}\n"
+                f"2. **拍一拍**（提醒某人）：\n"
+                f"   {{\"type\": \"pat\", \"target\": \"目标名字\"}}\n"
+                f"3. **发送图片**（描述图片内容）：\n"
+                f"   {{\"type\": \"image\", \"description\": \"图片内容的详细描述\"}}\n"
+                f"4. **撤回消息**（撤回你刚刚发送的一条消息）：\n"
+                f"   {{\"type\": \"recall\"}}\n"
             )
 
         # --- Auction Mode Injection ---
@@ -945,12 +948,27 @@ class ConsciousnessGroupSession:
                     clean_resp = clean_resp[:-3]
                 clean_resp = clean_resp.strip()
                 
+                # 1. Try pure JSON parse
                 if clean_resp.startswith("{") and clean_resp.endswith("}"):
                     try:
                         action_data = json.loads(clean_resp)
                     except:
                         pass
                 
+                # 2. If failed, try regex extraction (Mechanism-level guarantee)
+                if not action_data:
+                    import re
+                    # Look for JSON structure with "type" key
+                    # This regex matches { ... "type": "..." ... } allowing for newlines and nested braces (simple)
+                    match = re.search(r'(\{.*"type"\s*:\s*"(?:quote|pat|image|recall|hammer|bid)".*\})', clean_resp, re.DOTALL)
+                    if match:
+                        try:
+                            json_candidate = match.group(1)
+                            action_data = json.loads(json_candidate)
+                            self._log(f"[{my_name}] Extracted JSON command from text: {json_candidate[:50]}...")
+                        except:
+                            pass
+
                 if action_data and "type" in action_data:
                     action_type = action_data.get("type")
                     
@@ -1149,13 +1167,57 @@ class ConsciousnessGroupSession:
                 self._log(f"{name} 选择沉默")
                 responses[name] = "[沉默]"
             else:
-                # 模型发言，加入历史
-                responses[name] = resp
-                history_manager.append({"name": name, "content": resp})
+                # 模型发言
                 
-                # 触发UI更新
-                if self.log_callback:
-                    self.log_callback("NEW_MESSAGE")
+                # Check if it is a JSON command (Advanced Feature)
+                # If so, we should NOT add it to history as text, but trigger the event.
+                # However, the `log_callback` in `chat_server.py` handles parsing.
+                # BUT, if we add it to `history_manager` here as plain text, it will appear in the chat log.
+                # So we should try to detect it here too.
+                
+                is_json_command = False
+                msg_content = resp.strip()
+                if msg_content.startswith("{") and msg_content.endswith("}") and '"type":' in msg_content:
+                     # Simple check. If it looks like a command, we might want to store it differently?
+                     # Actually, `chat_server.py`'s `group_log` callback will receive "NEW_MESSAGE" 
+                     # which triggers broadcasting the last message in history.
+                     # If we put the JSON string in history, the frontend will render it as text unless frontend parses it.
+                     # The frontend `handleMessage` parses JSON events from `ws.onmessage`.
+                     # But `NEW_MESSAGE` type sends a message object.
+                     
+                     # Better approach: 
+                     # If it's a JSON command, we should treat it as an EVENT, not a MESSAGE.
+                     # So we should pass it to log_callback as a dict, and NOT append to history (or append as a special type).
+                     try:
+                         import json
+                         cmd_data = json.loads(msg_content)
+                         if "type" in cmd_data:
+                             is_json_command = True
+                             # Inject name if missing
+                             if "name" not in cmd_data:
+                                 cmd_data["name"] = name
+                             
+                             # Trigger event broadcast
+                             if self.log_callback:
+                                 self.log_callback(cmd_data)
+                             
+                             # Do we append to history?
+                             # If it's "quote", we want to show the quote in chat.
+                             # If it's "pat", maybe a system notice?
+                             # The frontend handles these events.
+                             # For now, let's NOT append to text history to avoid duplicate/raw text display.
+                             responses[name] = "[ACTION]" 
+                     except:
+                         pass
+
+                if not is_json_command:
+                    # Regular message
+                    responses[name] = resp
+                    history_manager.append({"name": name, "content": resp})
+                    
+                    # 触发UI更新
+                    if self.log_callback:
+                        self.log_callback("NEW_MESSAGE")
 
         return responses
 

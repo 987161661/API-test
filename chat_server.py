@@ -341,6 +341,37 @@ class ChatRoom:
 
                 # Handle legacy string events
                 msg_str = str(msg).strip()
+                
+                # Attempt to parse JSON from string if it looks like JSON
+                if msg_str.startswith("{") and msg_str.endswith("}"):
+                    try:
+                        import json
+                        # Try parsing pure JSON
+                        json_data = json.loads(msg_str)
+                        # If successful and has 'type', treat as event
+                        if isinstance(json_data, dict) and "type" in json_data:
+                            asyncio.run_coroutine_threadsafe(self.broadcast(json_data), loop)
+                            return
+                    except json.JSONDecodeError:
+                        pass
+                    
+                    # Try regex extraction if pure parse failed (e.g. mixed content)
+                    try:
+                        import re
+                        import json
+                        match = re.search(r'\{.*"type":\s*"(?:quote|pat|image|recall|hammer|bid)".*\}', msg_str, re.DOTALL)
+                        if match:
+                            json_str = match.group(0)
+                            json_data = json.loads(json_str)
+                            asyncio.run_coroutine_threadsafe(self.broadcast(json_data), loop)
+                            # If we extracted the JSON command, do we still want to show the text?
+                            # Usually if it's a command mixed with text, the text might be commentary.
+                            # But per user request "Why does it output text", implies they want the command to work.
+                            # So let's return here to suppress the raw text output if we successfully broadcast the event.
+                            return 
+                    except Exception:
+                        pass
+
                 if msg_str == "NEW_MESSAGE":
                     # 获取最新的一条消息并广播
                     if self.history:
@@ -458,23 +489,28 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                         
                     # Update member configs if provided in models list
                     if "models" in data:
-                        # Clear existing configs if full update -> NO, we want to keep avatars
-                        # room.member_configs = {} 
+                        # Rebuild member_configs to ensure removed members are deleted from config
+                        new_member_configs = {}
+                        
                         for m_conf in data["models"]:
                             m_name = m_conf.get("model_name")
                             if m_name:
-                                # Get existing config
+                                # Get existing config to preserve avatar if needed
                                 existing_conf = room.member_configs.get(m_name, {})
                                 
                                 # New config from client
                                 new_conf = {
+                                    "nickname": m_conf.get("nickname", m_name),
                                     "is_manager": m_conf.get("is_manager", False),
                                     "custom_prompt": m_conf.get("custom_prompt", ""),
                                     # Prefer existing avatar (user uploaded) over the one from setup (default)
                                     "avatar": existing_conf.get("avatar") or m_conf.get("avatar", ""),
                                     "memory": m_conf.get("memory", "")
                                 }
-                                room.member_configs[m_name] = new_conf
+                                new_member_configs[m_name] = new_conf
+                        
+                        # Replace existing configs with the new clean list
+                        room.member_configs = new_member_configs
                         
                         # Capture scenario config
                         if "scenario" in data:
@@ -705,4 +741,4 @@ async def get_status(room_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

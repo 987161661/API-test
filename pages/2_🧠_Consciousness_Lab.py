@@ -236,7 +236,7 @@ with tab1:
             with st.expander("🤖 AI 导演编排 (AI Director)", expanded=True):
                 st.caption("选派一个 AI 作为导演 (Director)，它将阅读剧本，自动为所有演员分配角色、同步时间线并设定收敛条件。")
                 
-                dir_c1, dir_c2, dir_c3 = st.columns([3, 3, 2])
+                dir_c1, dir_c2 = st.columns([1, 1])
                 with dir_c1:
                     # Director Provider Selection
                     dir_prov_names = [p.get("name", "Unknown") for p in st.session_state.providers]
@@ -267,17 +267,7 @@ with tab1:
                         # Fallback if no models loaded or provider not selected
                         st.warning("该服务商未加载模型列表，请手动输入")
                         dir_model_id = st.text_input("输入导演模型ID", value="gpt-4o", key="dir_model_input_manual")
-                    
-                with dir_c3:
-                    st.write("")
-                    st.write("")
-                    # Check if scenario has content
-                    has_scenario = "scenario_df" in st.session_state and not st.session_state.scenario_df.empty
-                    start_dir_btn = st.button("🎬 开始智能编排", use_container_width=True, type="primary", disabled=not has_scenario)
-                    if not has_scenario:
-                        st.caption("请先设置下方剧本时间线")
-                
-                director_output_container = st.container()
+
 
             with st.expander("📜 剧本与时间线设置", expanded=True):
                 st.caption("在此处定义时间轴和关键事件。勾选左侧方框以激活特定时间线。")
@@ -489,6 +479,22 @@ with tab1:
                 "enabled": True,
                 "events": st.session_state.scenario_df.to_dict("records")
             }
+            # Inject stage_type into scenario_config for backend propagation
+            scenario_config["stage_type"] = selected_stage
+
+            st.divider()
+            
+            # --- Start Director Button (Moved here) ---
+            # Check if scenario has content
+            has_scenario = "scenario_df" in st.session_state and not st.session_state.scenario_df.empty
+            
+            btn_col1, btn_col2, btn_col3 = st.columns([1, 2, 1])
+            with btn_col2:
+                start_dir_btn = st.button("🎬 开始智能编排", use_container_width=True, type="primary", disabled=not has_scenario)
+                if not has_scenario:
+                    st.caption("请先在上方的【剧本与时间线设置】中设置剧本")
+            
+            director_output_container = st.container()
 
             # --- Director Logic ---
             if "director_phase" not in st.session_state:
@@ -504,7 +510,7 @@ with tab1:
                     elif not subjects:
                         st.error("当前没有受试体（演员），请先在主页添加模型。")
                     elif st.session_state.scenario_df.empty:
-                        st.error("剧本时间线为空，请先在下方设置剧本。")
+                        st.error("剧本时间线为空，请先在上方的【剧本与时间线设置】中设置剧本。")
                     else:
                         status_box = st.status("🎬 导演正在进行选角 (Phase 1/2)...", expanded=True)
                         try:
@@ -614,33 +620,78 @@ with tab1:
                             
                             # Determine consistent context name based on theme to avoid conflicts
                             safe_theme = st.session_state.scenario_theme.strip() or "闲聊"
-                            consistent_group_name = f"{safe_theme}讨论组"
                             
-                            # Update backend with new group name
-                            try:
-                                requests.post(
-                                    f"http://localhost:8000/control/consciousness_lab/group_name", 
-                                    json={"group_name": consistent_group_name}
-                                )
-                            except Exception as e:
-                                st.warning(f"无法同步群名到后台: {e}")
-
-                            # --- Step 2a: Generate Unified World Bible (Shared Grounding) ---
-                            status_box.write("🌍 正在构建统一世界观 (Shared World Bible)...")
+                            # --- Step 2a: Generate Unified World Bible & Group Name ---
+                            status_box.write("🌍 正在构建世界观与拟定群名...")
+                            
                             world_gen_prompt = (
-                                f"你现在是【总导演】。请为剧本【{st.session_state.scenario_theme}】生成一段【统一世界观设定】。\n"
-                                f"这段文字将作为“绝对事实”分发给所有演员，以防止他们对环境产生认知冲突。\n"
+                                f"你现在是【总导演】。请为剧本【{st.session_state.scenario_theme}】完成以下两项任务：\n\n"
+                                f"任务一：【拟定群名/房间名】\n"
+                                f"请根据剧本主题和【{selected_stage}】的特点，取一个恰到好处的群名。\n"
                                 f"要求：\n"
-                                f"1. 明确当前的具体物理地点（如：并不是泛泛的‘森林’，而是‘迷雾森林中心的废弃小木屋’）。\n"
+                                f"- 必须简短有力（不超过15字）。\n"
+                                f"- 必须符合语境（例如微信群名可能很随意如“相亲相爱一家人”，跑团可能是“周五跑团夜”）。\n"
+                                f"- 严禁使用“语言模型”、“意识实验室”等出戏的词汇，除非剧本本身就是打破第四面墙的设定。\n\n"
+                                f"任务二：【统一世界观设定】\n"
+                                f"生成一段“绝对事实”分发给所有演员，防止认知冲突。\n"
+                                f"要求：\n"
+                                f"1. 明确当前的具体物理地点（如：‘迷雾森林中心的废弃小木屋’）。\n"
                                 f"2. 明确当前的氛围和感官细节（温度、光线、声音）。\n"
                                 f"3. 明确所有人都必须遵守的物理或社会规则。\n"
                                 f"4. 字数控制在 200 字以内，使用陈述句。\n"
-                                f"5. 不要包含特定角色的私密信息，只描述公共环境。\n"
+                                f"5. 不要包含特定角色的私密信息，只描述公共环境。\n\n"
+                                f"请务必输出 JSON 格式，包含以下字段：\n"
+                                f"- `group_name`: 拟定的群名。\n"
+                                f"- `world_bible`: 世界观设定文本。\n"
                             )
+                            
                             # Run synchronously for this single task
                             world_context_res = loop.run_until_complete(director_probe._query([{"role": "user", "content": world_gen_prompt}], temp_override=0.7))
-                            shared_world_context = world_context_res.strip()
-                            status_box.write(f"✅ 世界观已构建: {shared_world_context[:50]}...")
+                            
+                            # Parse JSON
+                            consistent_group_name = f"{safe_theme}讨论组" # Default fallback
+                            shared_world_context = ""
+                            
+                            try:
+                                json_match = re.search(r"```json\s*(.*?)\s*```", world_context_res, re.DOTALL)
+                                if json_match:
+                                    w_data = json.loads(json_match.group(1))
+                                else:
+                                    json_match = re.search(r"\{.*\}", world_context_res, re.DOTALL)
+                                    if json_match:
+                                        w_data = json.loads(json_match.group(0))
+                                    else:
+                                        w_data = {}
+                                
+                                if w_data.get("group_name"):
+                                    consistent_group_name = w_data["group_name"]
+                                if w_data.get("world_bible"):
+                                    shared_world_context = w_data["world_bible"]
+                                else:
+                                    # Fallback if parsing failed but text exists
+                                    shared_world_context = world_context_res
+                                    
+                            except Exception as e:
+                                st.warning(f"解析世界观JSON失败，使用原始文本: {e}")
+                                shared_world_context = world_context_res
+
+                            status_box.write(f"✅ 世界观已构建: {shared_world_context[:30]}...")
+                            status_box.write(f"🏷️ 群名已设定: {consistent_group_name}")
+                            
+                            # Update backend with new group name
+                            try:
+                                api_url = f"http://localhost:8001/control/consciousness_lab/group_name"
+                                resp = requests.post(
+                                    api_url, 
+                                    json={"group_name": consistent_group_name},
+                                    timeout=2.0
+                                )
+                                if resp.status_code == 200:
+                                    status_box.write(f"☁️ 群名已同步至服务器")
+                                else:
+                                    status_box.warning(f"同步群名失败: {resp.status_code} - {resp.text}")
+                            except Exception as e:
+                                status_box.warning(f"无法同步群名到后台 (服务未启动?): {e}")
 
                             async def generate_actor_brief(row):
                                 mid = row["Model ID"]
@@ -943,7 +994,7 @@ with tab1:
             })
         
         # WebSocket 服务器配置
-        ws_host = st.text_input("WebSocket 服务器地址", value="ws://localhost:8000", key="ws_host")
+        ws_host = st.text_input("WebSocket 服务器地址", value="ws://localhost:8001", key="ws_host")
         
         # Inject stage_type into scenario_config
         scenario_config["stage_type"] = selected_stage
@@ -968,7 +1019,7 @@ with tab1:
         with st.container(border=True):
             # 0. Helper: Fetch Status
             try:
-                status_res = requests.get(f"http://localhost:8000/control/consciousness_lab/status")
+                status_res = requests.get(f"http://localhost:8001/control/consciousness_lab/status")
                 status_data = status_res.json()
                 is_paused = status_data.get("is_paused", False)
                 current_idx = status_data.get("current_event_idx", 0)
@@ -986,11 +1037,11 @@ with tab1:
             with c_tl_1:
                 if is_paused:
                     if st.button("▶️ 继续", type="primary", use_container_width=True, help="恢复模型对话"):
-                        requests.post(f"http://localhost:8000/control/consciousness_lab/resume")
+                        requests.post(f"http://localhost:8001/control/consciousness_lab/resume")
                         st.rerun()
                 else:
                     if st.button("⏸️ 暂停", use_container_width=True, help="暂停模型对话（保持冷场）"):
-                        requests.post(f"http://localhost:8000/control/consciousness_lab/pause")
+                        requests.post(f"http://localhost:8001/control/consciousness_lab/pause")
                         st.rerun()
             
             with c_tl_2:
@@ -1009,7 +1060,7 @@ with tab1:
             
             with c_tl_3:
                 if st.button("⏩ 跳转时间 (Jump)", use_container_width=True, help="快进到选定事件"):
-                    requests.post(f"http://localhost:8000/control/consciousness_lab/jump", json={"event_idx": target_idx})
+                    requests.post(f"http://localhost:8001/control/consciousness_lab/jump", json={"event_idx": target_idx})
                     st.rerun()
 
             # 2. Sudden Event Injection
@@ -1020,7 +1071,7 @@ with tab1:
                 with c_inj_2:
                     if st.button("注入事件", use_container_width=True):
                         if event_content:
-                            requests.post(f"http://localhost:8000/control/consciousness_lab/event", json={"content": event_content})
+                            requests.post(f"http://localhost:8001/control/consciousness_lab/event", json={"content": event_content})
                             st.success("事件已注入！")
                             time.sleep(1)
                             st.rerun()
@@ -1057,7 +1108,7 @@ with tab1:
                             # Director Logic
                             try:
                                 # 1. Fetch Context
-                                hist_res = requests.get(f"http://localhost:8000/control/consciousness_lab/history")
+                                hist_res = requests.get(f"http://localhost:8001/control/consciousness_lab/history")
                                 context_data = hist_res.json()
                                 history = context_data.get("history", [])
                                 events = context_data.get("scenario", [])
@@ -1106,7 +1157,7 @@ with tab1:
                                         if action.get("type") == "update_scenario" and "events" in action:
                                             # Call update endpoint
                                             up_res = requests.post(
-                                                "http://localhost:8000/control/consciousness_lab/update_scenario",
+                                                "http://localhost:8001/control/consciousness_lab/update_scenario",
                                                 json={"scenario_events": action["events"]}
                                             )
                                             if up_res.status_code == 200:

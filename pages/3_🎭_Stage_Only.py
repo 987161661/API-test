@@ -62,7 +62,7 @@ st.markdown(hide_streamlit_style, unsafe_allow_html=True)
 # 渲染组件
 render_websocket_chat(
     room_id="consciousness_lab", 
-    ws_url="ws://localhost:8000", 
+    ws_url="ws://localhost:8001", 
     member_count=len(model_configs) + 1,
     model_configs=model_configs,
     scenario_config={},

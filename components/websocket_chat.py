@@ -9,7 +9,7 @@ import streamlit.components.v1 as components
 import json
 
 
-def render_websocket_chat(room_id: str = "consciousness_lab", ws_url: str = "ws://localhost:8000", member_count: int = 3, model_configs: list = None, scenario_config: dict = None, is_stage_view: bool = False):
+def render_websocket_chat(room_id: str = "consciousness_lab", ws_url: str = "ws://localhost:8001", member_count: int = 3, model_configs: list = None, scenario_config: dict = None, is_stage_view: bool = False):
     """
     渲染 WebSocket 实时群聊界面 - 使用与传统模式相同的微信精确 UI
     
@@ -619,7 +619,7 @@ input:checked + .slider:before {{ transform: translateX(14px); }}
                     <div class="wc-chat-avatar">👥</div>
                     <div class="wc-chat-info">
                         <div class="wc-chat-row">
-                            <div class="wc-chat-name">语言模型内部意识讨论群</div>
+                            <div class="wc-chat-name" id="sidebarGroupName">语言模型内部意识讨论群</div>
                             <div class="wc-chat-time" id="lastTime">--:--</div>
                         </div>
                         <div class="wc-chat-preview" id="lastPreview">连接中...</div>
@@ -893,7 +893,11 @@ function handleMessage(data) {{
             renderScenarioTimeline(data.events, data.current_event_idx);
             break;
         case "settings_updated":
-            if (data.group_name) document.getElementById("groupName").innerText = data.group_name;
+            if (data.group_name) {{
+                document.getElementById("groupName").innerText = data.group_name;
+                const sidebarName = document.getElementById("sidebarGroupName");
+                if (sidebarName) sidebarName.innerText = data.group_name;
+            }}
             if (data.scenario_status) {{
                 const sDiv = document.getElementById("scenarioStatus");
                 if (!isStageView) {{
@@ -940,7 +944,11 @@ function handleMessage(data) {{
                     }});
                 }}
             }});
-            if (data.group_name) document.getElementById("groupName").innerText = data.group_name;
+            if (data.group_name) {{
+                document.getElementById("groupName").innerText = data.group_name;
+                const sidebarName = document.getElementById("sidebarGroupName");
+                if (sidebarName) sidebarName.innerText = data.group_name;
+            }}
             renderMemberList();
             break;
     }}

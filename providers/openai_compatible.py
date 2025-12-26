@@ -7,7 +7,23 @@ from core.schema import TestResult, ChatMessage
 
 class OpenAICompatibleProvider(LLMProvider):
     def __init__(self, api_key: str, base_url: str):
-        self.api_key = api_key
+        # Ensure api_key is a string and strip whitespace to prevent "Illegal header value" errors
+        self.api_key = (api_key or "").strip()
+        
+        # Ensure base_url is a string and strip whitespace
+        base_url = (base_url or "").strip()
+        
+        # Default to OpenAI if empty
+        if not base_url:
+            base_url = "https://api.openai.com/v1"
+            
+        # Auto-fix protocol if missing
+        if not base_url.startswith(("http://", "https://")):
+            if "localhost" in base_url or "127.0.0.1" in base_url or "0.0.0.0" in base_url:
+                base_url = "http://" + base_url
+            else:
+                base_url = "https://" + base_url
+                
         self.base_url = base_url.rstrip('/')
         self.headers = {
             "Authorization": f"Bearer {self.api_key}",
