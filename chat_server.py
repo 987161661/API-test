@@ -410,6 +410,17 @@ class ChatRoom:
                         if "is_user" not in latest_msg:
                             latest_msg["is_user"] = False
                             
+                        # Fix: Inject Nickname/Avatar if missing (Critical for AI messages)
+                        m_name = latest_msg.get("name")
+                        if m_name and m_name in self.member_configs:
+                             config = self.member_configs[m_name]
+                             # Inject nickname
+                             if "nickname" in config and "nickname" not in latest_msg:
+                                 latest_msg["nickname"] = config["nickname"]
+                             # Inject avatar
+                             if "avatar" in config and "avatar" not in latest_msg:
+                                 latest_msg["avatar"] = config["avatar"]
+
                         # 广播标准消息格式
                         asyncio.run_coroutine_threadsafe(self.broadcast({
                             "type": "message",
