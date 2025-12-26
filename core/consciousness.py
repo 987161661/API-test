@@ -480,7 +480,7 @@ class ConsciousnessGroupSession:
             summary_prompt = (
                 f"这是刚才发生的一段对话记录：\n"
                 f"------\n{chat_log}------\n"
-                f"你是 {probe._modelName}。请简要总结这段对话中发生的关键事件、你对他人的看法变化，以及你自己的心理活动。\n"
+                f"你是 {get_nick(probe._modelName)}。请简要总结这段对话中发生的关键事件、你对他人的看法变化，以及你自己的心理活动。\n"
                 f"总结要简练（100字以内），作为你的长期记忆保存。"
             )
             
@@ -516,7 +516,7 @@ class ConsciousnessGroupSession:
                 f"- 时间：{next_event.get('Time', '未知')}\n"
                 f"- 事件：{next_event.get('Event', '未知')}\n"
                 f"- 目标：{next_event.get('Goal', '无')}\n\n"
-                f"你是 {probe._modelName}。请结合你的性格和过往经历，思考：\n"
+                f"你是 {self.member_configs.get(probe._modelName, {}).get('nickname', probe._modelName)}。请结合你的性格和过往经历，思考：\n"
                 f"1. 你现在的心情如何？\n"
                 f"2. 你对新环境有什么打算？\n"
                 f"3. 制定一个简短的【自我行动方针】（Self-Action Policy），指导你接下来的言行。\n\n"
@@ -987,6 +987,17 @@ class ConsciousnessGroupSession:
             
             try:
                 resp = await probe._query(msgs, temp_override=0.85)
+                
+                # PARANOID ID SCRUBBING
+                # Scan raw response for any Model IDs and replace with Nicknames
+                # This prevents leaks even if the model hallucinates or remembers IDs
+                for m_id in all_model_names:
+                    if m_id in resp:
+                         # Get nickname for this ID
+                         m_conf = self.member_configs.get(m_id, {})
+                         m_nick_scrub = m_conf.get("nickname", m_id)
+                         if m_nick_scrub != m_id:
+                             resp = resp.replace(m_id, m_nick_scrub)
                 
                 # Try parsing JSON for actions
                 action_data = None
