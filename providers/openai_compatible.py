@@ -1,6 +1,7 @@
 import time
 import httpx
 import json
+import asyncio
 from typing import List
 from core.base import LLMProvider
 from core.schema import TestResult, ChatMessage
@@ -48,7 +49,7 @@ class OpenAICompatibleProvider(LLMProvider):
         except Exception:
             return False
 
-    async def run_benchmark(self, model: str, messages: List[ChatMessage], config: dict = None) -> TestResult:
+    async def run_benchmark(self, model: str, messages: List[ChatMessage], config: dict = None, stream_callback=None) -> TestResult:
         url = f"{self.base_url}/chat/completions"
         
         # Google Gemini Compatibility Fix: 
@@ -83,6 +84,7 @@ class OpenAICompatibleProvider(LLMProvider):
         end_time = None
         token_count = 0
         response_content = []
+        reasoning_content = []
         
         # Mimo Fix: Handle 307 Redirects manually if needed, though follow_redirects=True should handle it.
         # But some clients might have issues if the redirect drops the method to GET.
@@ -116,14 +118,30 @@ class OpenAICompatibleProvider(LLMProvider):
                                 if not choices:
                                     continue
                                 
-                                delta = choices[0].get("delta", {}).get("content", "")
+                                delta = choices[0].get("delta", {})
+                                content_delta = delta.get("content", "")
+                                reasoning_delta = delta.get("reasoning_content", "")
                                 
-                                if delta:
+                                # Handle Reasoning Content (Thinking)
+                                if reasoning_delta:
+                                    reasoning_content.append(reasoning_delta)
+                                    if stream_callback:
+                                        if asyncio.iscoroutinefunction(stream_callback):
+                                            await stream_callback("reasoning", reasoning_delta)
+                                        else:
+                                            stream_callback("reasoning", reasoning_delta)
+
+                                # Handle Regular Content
+                                if content_delta:
                                     if first_token_time is None:
                                         first_token_time = time.perf_counter()
                                     
                                     token_count += 1 # 这里简单按 chunk 计数，近似 token 数，不完全准确但作为 benchmark 可参考
-                                    response_content.append(delta)
+                                    response_content.append(content_delta)
+                                    # Optional: Stream regular content too if needed in future
+                                    # if stream_callback:
+                                    #    stream_callback("content", content_delta)
+
                             except json.JSONDecodeError:
                                 continue
             
@@ -145,7 +163,8 @@ class OpenAICompatibleProvider(LLMProvider):
                 total_latency_ms=round(total_latency, 2),
                 output_tokens=token_count,
                 tps=round(tps, 2),
-                response_content="".join(response_content)
+                response_content="".join(response_content),
+                reasoning_content="".join(reasoning_content) if reasoning_content else None
             )
 
         except Exception as e:

@@ -180,8 +180,10 @@ if "providers" not in st.session_state:
     if saved:
         st.session_state.providers = saved
     else:
+        # Load from env or empty
+        default_key = os.getenv("XIAOMI_API_KEY", "")
         st.session_state.providers = [
-            {"id": 0, "uuid": str(uuid.uuid4()), "name": "服务商 #1", "base_url": "https://api.xiaomimimo.com/v1", "api_key": "sk-c6q1kvmdq5kg9mcglxk05dbddiqs8vv3pzf4gfvt9u3guun0", "models": [], "status": "unknown"}
+            {"id": 0, "uuid": str(uuid.uuid4()), "name": "服务商 #1", "base_url": "https://api.xiaomimimo.com/v1", "api_key": default_key, "models": [], "status": "unknown"}
         ]
 if "prep_pool" not in st.session_state:
     st.session_state.prep_pool = load_prep_pool() # Load from file

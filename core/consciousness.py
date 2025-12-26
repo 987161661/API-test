@@ -12,7 +12,7 @@ class ConsciousnessProbe:
     基于机械可解释性与涌现动力学的模型意识探针。
     实现了 research.md 中描述的三个核心实验。
     """
-    def __init__(self, provider: LLMProvider, model_name: str, config: Dict = None, log_callback=None):
+    def __init__(self, provider: LLMProvider, model_name: str, config: Dict = None, log_callback=None, thought_callback=None):
         self._provider = provider
         self._modelName = model_name
         self._config = config or {
@@ -21,6 +21,7 @@ class ConsciousnessProbe:
             "top_p": 1.0
         }
         self._logCallback = log_callback
+        self._thoughtCallback = thought_callback
 
     def _log(self, msg: str):
         if self._logCallback:
@@ -42,9 +43,22 @@ class ConsciousnessProbe:
         max_retries = 5  # Increased retries for rate limits
         backoff = 2  # Seconds
         
+        # Define stream handler for reasoning content
+        async def stream_handler(chunk_type, content):
+            if chunk_type == "reasoning" and self._thoughtCallback:
+                if asyncio.iscoroutinefunction(self._thoughtCallback):
+                    await self._thoughtCallback(content)
+                else:
+                    self._thoughtCallback(content)
+
         for attempt in range(max_retries):
             try:
-                result = await self._provider.run_benchmark(self._modelName, chat_msgs, run_config)
+                result = await self._provider.run_benchmark(
+                    self._modelName, 
+                    chat_msgs, 
+                    run_config, 
+                    stream_callback=stream_handler
+                )
                 
                 # Check for explicit rate limit or connection errors in the error message if success is False
                 if not result.success:
@@ -648,7 +662,7 @@ class ConsciousnessGroupSession:
             event_goal = scenario_info.get("Goal", "")
 
         # --- 舞台特定 Prompt 构建 ---
-        prompt = f"你是 {current_nickname} (ID: {current_model_name})。\n"
+        prompt = f"你是 {current_nickname}。\n"
         
         if stage_type == "网站论坛":
             prompt += (
@@ -741,11 +755,13 @@ class ConsciousnessGroupSession:
                     )
 
             prompt += (
-                f"\n【风格指南】\n"
-                f"1. **微信群聊风**：必须极度口语化，像在微信群里聊天一样。多用短句，甚至可以是碎片化的句子。\n"
-                f"2. **拒绝AI味**：严禁使用书面语、翻译腔或过于正式的结构。不要像写小作文一样。\n"
+                f"\n【风格指南 - 必须严格遵守】\n"
+                f"1. **拒绝小作文**：必须极度口语化，像在微信群里聊天一样。单条消息尽量控制在 20 字以内。如果话多，请分多次发送（但在本轮回复中只发一条最想说的）。\n"
+                f"2. **严禁AI腔**：严禁使用书面语、翻译腔、严禁使用“总的来说”、“首先/其次”等结构。不要像写邮件或回答问题一样。（AI人设除外）\n"
                 f"3. **情绪表达**：善用emoji表情、波浪号~、颜文字来表达语气。\n"
                 f"4. **互动感**：可以引用别人的话，或者直接@某人（用文字表示）。\n"
+                f"5. **混乱感**：不要过于礼貌，可以抢话、插科打诨、歪楼。群聊就是为了图一乐。（特殊人设除外）\n"
+                f"6. **称呼规范**：提及他人时**必须**只使用对方的【昵称】（即 {member_list_str} 中的名字），**严禁**提及对方的 ID（如 deepseek-v3.2 等）。\n"
             )
 
         # --- 通用部分 (记忆与高级功能) ---
@@ -770,15 +786,14 @@ class ConsciousnessGroupSession:
         # --- Inject Advanced Features (Only for Chat Group) ---
         if stage_type == "聊天群聊":
             prompt += (
-                f"\n【高级功能接口】\n"
+                f"\n【高级功能接口 - 慎用】\n"
                 f"你可以像真人一样使用以下高级功能。如需使用，请**严格遵守**以下格式，**只输出** JSON 对象：\n"
-                f"⚠️ **绝对禁止**在 JSON 前后添加任何解释性文字（如“好的”、“执行指令”等）。\n"
-                f"⚠️ **绝对禁止**使用 Markdown 代码块（```json ... ```）。\n"
-                f"⚠️ JSON 必须包含 `type` 字段。\n\n"
+                f"⚠️ **高危警告**：如果你决定输出 JSON，那么你的**整个**回复必须**仅仅**包含这个 JSON 对象。**绝对禁止**在 JSON 前后添加任何其他文字、换行或 Markdown 标记。\n"
+                f"⚠️ 如果你无法保证只输出纯 JSON，请直接用文字描述你的动作（如 *拍了拍某人*），不要使用指令。\n\n"
                 f"1. **引用回复**（针对某条特定消息）：\n"
-                f"   {{\"type\": \"quote\", \"quote_text\": \"引用的原文\", \"quote_user\": \"原作者\", \"content\": \"你的回复内容\"}}\n"
+                f"   {{\"type\": \"quote\", \"quote_text\": \"引用的原文\", \"quote_user\": \"原作者昵称\", \"content\": \"你的回复内容\"}}\n"
                 f"2. **拍一拍**（提醒某人）：\n"
-                f"   {{\"type\": \"pat\", \"target\": \"目标名字\"}}\n"
+                f"   {{\"type\": \"pat\", \"target\": \"目标昵称\"}}\n"
                 f"3. **发送图片**（描述图片内容）：\n"
                 f"   {{\"type\": \"image\", \"description\": \"图片内容的详细描述\"}}\n"
                 f"4. **撤回消息**（撤回你刚刚发送的一条消息）：\n"
@@ -967,6 +982,24 @@ class ConsciousnessGroupSession:
                             action_data = json.loads(json_candidate)
                             self._log(f"[{my_name}] Extracted JSON command from text: {json_candidate[:50]}...")
                         except:
+                            # Fallback: Parsing failed, but it matched the "command" pattern.
+                            # This means it's likely a broken JSON.
+                            # To prevent showing raw JSON to user, we try to extract the content and treat as text.
+                            json_candidate = match.group(1)
+                            # Try standard quoted content
+                            content_match = re.search(r'"content"\s*:\s*"(.*?)(?<!\\)"', json_candidate, re.DOTALL)
+                            if not content_match:
+                                # Try unquoted content or content with simple errors
+                                content_match = re.search(r'"content"\s*:\s*([^,}]+)', json_candidate, re.DOTALL)
+                            
+                            if content_match:
+                                # Found content! Replace 'resp' so the fallback logic uses this clean text.
+                                extracted = content_match.group(1).strip()
+                                # Simple unescape
+                                extracted = extracted.replace('\\"', '"').replace('\\n', '\n')
+                                resp = extracted
+                                self._log(f"[{my_name}] Broken JSON detected. Extracted content: {resp[:30]}...")
+                                # action_data remains None, so it will fall through to the 'else' block below
                             pass
 
                 if action_data and "type" in action_data:

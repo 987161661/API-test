@@ -794,7 +794,15 @@ function updateMemberSettings(name, field, value) {{
     const member = members.find(m => m.name === name);
     if (!member) return;
     
-    if (field === 'isManager') member.isManager = value;
+    if (field === 'isManager') {{
+        member.isManager = value;
+        // Optimistic update: if setting to true, unset others
+        if (value === true) {{
+            members.forEach(m => {{
+                if (m.name !== name) m.isManager = false;
+            }});
+        }}
+    }}
     if (field === 'customPrompt') member.customPrompt = value;
     
     // Send update immediately or wait for start? 
@@ -870,7 +878,7 @@ function handleMessage(data) {{
             }}
             break;
         case "thought":
-            updateThought(data.model, data.content);
+            updateThought(data.model, data.content, data.append);
             break;
         case "typing":
             updateTypingIndicator(data.models);
@@ -931,9 +939,11 @@ function handleMessage(data) {{
                     existing.isManager = member.is_manager;
                     existing.customPrompt = member.custom_prompt;
                     existing.avatar = member.avatar;
+                    existing.nickname = member.nickname;
                 }} else {{
                     members.push({{
                         name: member.name,
+                        nickname: member.nickname,
                         isUser: member.is_user,
                         isManager: member.is_manager,
                         customPrompt: member.custom_prompt || "",
@@ -959,6 +969,7 @@ function updateMemberFromMsg(msg) {{
     if (!member) {{
         member = {{
             name: msg.name,
+            nickname: msg.nickname,
             isUser: msg.is_user || msg.name === "Gaia",
             isThinking: false,
             lastThought: "",
@@ -970,13 +981,17 @@ function updateMemberFromMsg(msg) {{
     }}
 }}
 
-function updateThought(modelName, content) {{
+function updateThought(modelName, content, append = false) {{
     let member = members.find(m => m.name === modelName);
     if (!member) {{
         member = {{ name: modelName, isUser: false, isThinking: true, lastThought: content }};
         members.push(member);
     }} else {{
-        member.lastThought = content; // Overwrite with latest thought
+        if (append) {{
+            member.lastThought = (member.lastThought || "") + content;
+        }} else {{
+            member.lastThought = content; // Overwrite with latest thought
+        }}
         member.isThinking = true;
     }}
     renderMemberList();
@@ -985,6 +1000,9 @@ function updateThought(modelName, content) {{
     const title = document.getElementById("thoughtModalTitle");
     if (modal.style.display === "flex" && title.textContent.includes(modelName)) {{
         document.getElementById("thoughtModalBody").textContent = member.lastThought;
+        // Auto scroll to bottom of thought
+        const body = document.getElementById("thoughtModalBody");
+        body.scrollTop = body.scrollHeight;
     }}
 }}
 
@@ -1096,6 +1114,7 @@ function renderMemberList() {{
         
         // Change onclick to triggerAvatarUpload for avatars
         // New Layout: Avatar | Info (Name + Status)
+        const displayName = m.nickname || m.name;
         const html = `
             <div class="wc-member-item ${{m.isThinking ? 'is-thinking' : ''}} ${{m.expanded ? 'expanded' : ''}}" id="member-${{escapeHtml(m.name)}}">
                 <div class="wc-member-row" onclick="toggleMemberExpand('${{escapeHtml(m.name)}}')">
@@ -1105,7 +1124,7 @@ function renderMemberList() {{
                     </div>
                     <div class="wc-member-info" style="flex:1; min-width:0; display:flex; flex-direction:column; justify-content:center; margin-left:8px;">
                         <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <div class="wc-member-name">${{escapeHtml(m.name)}} ${{managerBadge}}</div>
+                            <div class="wc-member-name" title="${{escapeHtml(m.name)}}">${{escapeHtml(displayName)}} ${{managerBadge}}</div>
                         </div>
                         ${{statusHtml}}
                     </div>

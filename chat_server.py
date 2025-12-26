@@ -165,6 +165,10 @@ class ChatRoom:
             "is_user": is_user
         }
         
+        # Inject nickname if available
+        if name in self.member_configs and "nickname" in self.member_configs[name]:
+            msg["nickname"] = self.member_configs[name]["nickname"]
+
         # Inject avatar if available
         if name in self.member_configs and "avatar" in self.member_configs[name]:
             msg["avatar"] = self.member_configs[name]["avatar"]
@@ -211,12 +215,13 @@ class ChatRoom:
             "models": list(self.typing_users)
         })
     
-    async def send_thought(self, model_name: str, content: str):
+    async def send_thought(self, model_name: str, content: str, append: bool = False):
         """发送思考内容到所有客户端"""
         await self.broadcast({
             "type": "thought",
             "model": model_name,
-            "content": content
+            "content": content,
+            "append": append
         })
 
     def set_paused(self, paused: bool):
@@ -314,17 +319,40 @@ class ChatRoom:
                     # 但在多线程/协程环境下，我们需要确保在正确的事件循环中运行
                     try:
                         loop = asyncio.get_event_loop()
+                        # Smart Append Logic:
+                        # If message starts with "正在思考" (Start of turn), overwrite (append=False).
+                        # Otherwise (e.g. "回答生成", "错误", or intermediate logs), append to preserve CoT.
+                        # Also add a newline for readability if appending.
+                        should_append = not msg.startswith("正在思考")
+                        
+                        content_to_send = msg
+                        if should_append:
+                            content_to_send = "\n\n" + msg
+
                         if loop.is_running():
-                            asyncio.run_coroutine_threadsafe(self.send_thought(name, msg), loop)
+                            asyncio.run_coroutine_threadsafe(
+                                self.send_thought(name, content_to_send, append=should_append), 
+                                loop
+                            )
                     except Exception as e:
                         print(f"Error in thought callback: {e}")
+                return callback
+
+            # 创建回调函数来广播思维链 (Reasoning Content)
+            def create_thought_callback(name):
+                async def callback(msg):
+                    try:
+                        await self.send_thought(name, msg, append=True)
+                    except Exception as e:
+                        print(f"Error in reasoning callback: {e}")
                 return callback
 
             probe = ConsciousnessProbe(
                 provider=provider,
                 model_name=m_name,
                 config={"temperature": 0.85, "max_tokens": 512},
-                log_callback=create_log_callback(m_name)
+                log_callback=create_log_callback(m_name),
+                thought_callback=create_thought_callback(m_name)
             )
             self.probes.append(probe)
         
@@ -542,6 +570,12 @@ async def websocket_endpoint(websocket: WebSocket, room_id: str):
                     if "member_configs" in data:
                         # Expect dict: {model_name: {is_manager: bool, custom_prompt: str}}
                         for m_name, conf in data["member_configs"].items():
+                            # Logic for single manager: if this member is set to manager, unset others
+                            if conf.get("is_manager") is True:
+                                for other_name, other_conf in room.member_configs.items():
+                                    if other_name != m_name and other_conf.get("is_manager"):
+                                        other_conf["is_manager"] = False
+
                             if m_name in room.member_configs:
                                 room.member_configs[m_name].update(conf)
                             else:

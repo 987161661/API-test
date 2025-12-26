@@ -11,6 +11,7 @@ class TestResult(BaseModel):
     tps: float = 0.0 # Tokens Per Second
     error_message: Optional[str] = None
     response_content: Optional[str] = None
+    reasoning_content: Optional[str] = None # Chain of thought content
     
     # New fields for capabilities
     category: Optional[str] = "General"

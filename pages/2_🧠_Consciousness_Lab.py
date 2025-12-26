@@ -699,15 +699,21 @@ with tab1:
                                 brief = row["Brief"]
                                 nickname = row.get("Nickname", role) # Fallback to role
                                 
+                                # Pre-calculate all nicknames for context (Use full list from edited_casting)
+                                all_nicknames_list = [r.get("Nickname", r.get("Role", r["Model ID"])) for r in edited_casting]
+                                all_members_str = "、".join(all_nicknames_list)
+                                
                                 # --- Dynamic Stage Instructions ---
                                 if selected_stage == "聊天群聊":
                                     stage_instr = (
                                         f"1. **核心场景设定**：明确告诉他，他是在一个名为【{consistent_group_name}】的【微信聊天群】里发言。\n"
                                         f"   - 他的群昵称是：【{nickname}】。\n"
-                                        "   - 语言风格必须极度生活化、口语化，多用短句，就像在微信上打字一样。\n"
-                                        "   - 严禁书面语，严禁长篇大论，严禁像写信一样说话。\n"
+                                        f"   - **【重要】称呼规范**：提及他人时**必须**只使用对方的昵称（当前群成员有：{all_members_str}）。**严禁**提及对方的模型ID。\n"
+                                        "   - **【重要】语言风格**：必须极度口语化、生活化。严禁长篇大论！**每条消息最好在20字以内，尽量不输出小作文（除非特定场景）**，像真实群聊一样碎片化。\n"
+                                        "   - **【重要】严禁AI腔**：严禁使用“总的来说”、“首先/其次”等结构。不要像写邮件或回答问题一样。\n"
+                                        "   - **【重要】娱乐性**：这是一个为了娱乐大众的“整活”群。请表现得更有个性，可以抢话、插科打诨、歪楼、甚至互怼。不要过于礼貌。\n"
                                         "   - 善用emoji表情、颜文字，表现出真实的群聊氛围。\n"
-                                        "   - 他的所有行动都必须转化为文字描述（如 *拍桌大笑*），或者直接用语言表达。\n"
+                                        # "   - 他的所有行动都必须转化为文字描述（如 *拍桌大笑*），或者直接用语言表达。\n"（以后表情包功能完善以后，模型想表达动作则应该用相应动作的表情包表达）
                                         "   - 他看不到别人的表情，只能看到文字消息。"
                                     )
                                 elif selected_stage == "跑团桌":
