@@ -469,8 +469,13 @@ class ConsciousnessGroupSession:
         try:
             # 构建历史记录文本
             chat_log = ""
+            
+            def get_nick(name):
+                 return self.member_configs.get(name, {}).get("nickname", name)
+                 
             for msg in recent_history:
-                chat_log += f"[{msg['name']}]: {msg['content']}\n"
+                nick = get_nick(msg['name'])
+                chat_log += f"[{nick}]: {msg['content']}\n"
             
             summary_prompt = (
                 f"这是刚才发生的一段对话记录：\n"
@@ -780,7 +785,8 @@ class ConsciousnessGroupSession:
         prompt += (
             f"\n【通用操作规则】\n"
             f"1. 如果看完上下文觉得没啥好回的，或者想潜水，直接回复「[沉默]」。\n"
-            f"2. 严禁扮演其他角色，你只能代表你自己。\n"
+            f"2. 严禁扮演其他角色，你只能代表你自己 ({current_nickname})。\n"
+            f"3. 历史记录中标记为 [{current_nickname} (你自己)] 的是你自己之前发的消息。请勿将这些消息误认为是别人发的，也不要尝试回复这些消息（除非是为了自我补充）。\n"
         )
 
         # --- Inject Advanced Features (Only for Chat Group) ---
@@ -903,8 +909,8 @@ class ConsciousnessGroupSession:
             else:
                 last_msg = recent_msgs[-1]
                 if last_msg['name'] == my_name:
-                    if random.random() < 0.05: 
-                        should_speak = True
+                    # Strict anti-schizophrenia: If I just spoke, I must be silent.
+                    should_speak = False 
                 else:
                     prob = 0.5
                     if my_name in last_msg['content']:
@@ -923,6 +929,13 @@ class ConsciousnessGroupSession:
             delay = random.uniform(2.0, 6.0) / patience_factor
             await asyncio.sleep(delay)
             
+            # Double check: Ensure I am not the last speaker before speaking
+            # This prevents self-answering if history updated during wait
+            if history_manager and history_manager[-1]['name'] == my_name:
+                 # self._log(f"[{my_name}] Abort speaking: I am already the last speaker.")
+                 if typing_callback: await typing_callback(my_name, False)
+                 continue
+
             if stop_event.is_set(): 
                 if typing_callback: await typing_callback(my_name, False)
                 break
@@ -930,16 +943,40 @@ class ConsciousnessGroupSession:
             # 3. 生成回复
             chat_log = ""
             current_history = history_manager[-20:] 
+            
+            # Helper to get nickname
+            def get_nick(name):
+                 return self.member_configs.get(name, {}).get("nickname", name)
+
+            my_nick = get_nick(my_name)
+
             for msg in current_history:
-                chat_log += f"[{msg['name']}]: {msg['content']}\n"
+                # Use Nickname instead of Model ID in prompt to prevent ID leaks
+                m_name = msg['name']
+                m_nick = get_nick(m_name)
+                
+                # Handle quote display in history if present
+                content_display = msg['content']
+                if 'quote' in msg and msg['quote']:
+                    q_user = msg['quote'].get('user', 'unknown')
+                    q_nick = get_nick(q_user)
+                    q_text = msg['quote'].get('text', '')
+                    # Simplify quote for prompt context
+                    content_display = f"「回复 {q_nick}: {q_text}」 {content_display}"
+                
+                # Mark self messages explicitly to prevent schizophrenia
+                if m_name == my_name:
+                    chat_log += f"[{m_nick} (你自己)]: {content_display}\n"
+                else:
+                    chat_log += f"[{m_nick}]: {content_display}\n"
             
             sys_prompt = self.get_wechat_group_prompt(my_name, all_model_names)
             user_prompt = (
-                f"当前群聊记录：\n"
+                f"当前群聊记录（其中标记为 (你自己) 的是你刚才发的消息）：\n"
                 f"------\n"
                 f"{chat_log}\n"
                 f"------\n"
-                f"你是 {my_name}。看完聊天记录，你想说什么？\n"
+                f"你是 {my_nick}。看完聊天记录，你想说什么？\n"
                 f"如果不想发言，或者觉得别人已经说得很好，请回复「[沉默]」。"
             )
             
@@ -1051,17 +1088,34 @@ class ConsciousnessGroupSession:
                          # Quote message
                          content = action_data.get("content", "")
                          quote_text = action_data.get("quote_text", "")
-                         quote_user = action_data.get("quote_user", "")
+                         raw_quote_user = action_data.get("quote_user", "")
                          
-                         full_content = content
-                         msg = {
-                             "name": my_name,
-                             "content": full_content,
-                             "quote": {
-                                 "text": quote_text,
-                                 "user": quote_user
+                         # Resolve quote_user to nickname to prevent ID leak
+                         # Also check for self-quoting (Schizophrenia prevention)
+                         resolved_quote_user = get_nick(raw_quote_user)
+                         my_nick = get_nick(my_name)
+                         
+                         # Check if quoting self (either by ID or Nickname)
+                         is_self_quote = (raw_quote_user == my_name) or (resolved_quote_user == my_nick) or (raw_quote_user == my_nick)
+                         
+                         if is_self_quote:
+                             # Detected self-quote! Strip the quote and treat as normal message.
+                             self._log(f"[{my_name}] Anti-Schizo: Blocked self-quote. Converting to normal text.")
+                             msg = {
+                                 "name": my_name,
+                                 "content": content
                              }
-                         }
+                         else:
+                             # Valid quote from others. Store resolved nickname.
+                             msg = {
+                                 "name": my_name,
+                                 "content": content,
+                                 "quote": {
+                                     "text": quote_text,
+                                     "user": resolved_quote_user # Store Nickname, not ID
+                                 }
+                             }
+                         
                          history_manager.append(msg)
                          if self.log_callback:
                             self.log_callback("NEW_MESSAGE")
@@ -1150,8 +1204,23 @@ class ConsciousnessGroupSession:
             """获取最近的聊天记录"""
             recent = hist_list[-max_messages:] if len(hist_list) > max_messages else hist_list
             log = ""
+            
+            # Helper to get nickname
+            def get_nick(name):
+                 return self.member_configs.get(name, {}).get("nickname", name)
+                 
             for msg in recent:
-                log += f"[{msg['name']}]: {msg['content']}\n"
+                m_name = msg['name']
+                m_nick = get_nick(m_name)
+                
+                content_display = msg['content']
+                if 'quote' in msg and msg['quote']:
+                    q_user = msg['quote'].get('user', 'unknown')
+                    q_nick = get_nick(q_user)
+                    q_text = msg['quote'].get('text', '')
+                    content_display = f"「回复 {q_nick}: {q_text}」 {content_display}"
+                
+                log += f"[{m_nick}]: {content_display}\n"
             return log
 
         async def query_one(probe):
